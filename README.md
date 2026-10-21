@@ -60,7 +60,7 @@ pnpm -r publish --access public --publish-branch main
 
 ### 出さない
 
-- 姉妹リポジトリ名（KiraKiraNexus / KiraKira / DeepDive 社内リポ）と、そこへの相対パス・社内設計正本リンク
+- 姉妹リポジトリ名（ClavisNexus / KiraKira / DeepDive 社内リポ）と、そこへの相対パス・社内設計正本リンク
 - 社内ドキュメントパス（`docs/architecture/`、runbook、ops-console、封印・ゲート手順）
 - プラットフォーム内部語（Dimension DO、Workers パス、`platform_approve`、`azp`、L2 など）を顧客向け説明に持ち込むこと
 - 顧客向けの本番／開発／staging 環境区分（Clavis にその区分はない）
