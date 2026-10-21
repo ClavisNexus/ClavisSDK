@@ -5,7 +5,6 @@ Clavis App 向けの公開 npm パッケージ。ライセンスは MIT。
 | ディレクトリ | npm 名 | 役割 |
 |---|---|---|
 | `packages/app` | `@clavis.nexus/app` | サーバ SDK。署名依頼の登録、status、webhook ping、台帳への記録と証拠束。受領・委任の記録・証拠束は照合器 Collatio で確かめる |
-| `packages/collatio` | （`@clavis.nexus/collatio` の写し） | 照合器（Collatio）の JS 層と WASM。`@clavis.nexus/collatio` を npm に出すまで `scripts/sync-collatio.mjs` で写す。公開しない |
 | `packages/app-shell` | `@clavis.nexus/app-shell` | ブラウザの準備オーバーレイ（Connect へ渡すまで） |
 | `packages/setup` | `@clavis.nexus/setup` | developers 向けセットアップ CLI／MCP（Passkey と同意は人間） |
 
@@ -35,7 +34,7 @@ Clavis App 向けの公開 npm パッケージ。ライセンスは MIT。
 
 `setup` は `@clavis.nexus/app` に依存する。`app` の新版を承認してから `setup` のタグを打つ。pack した `package.json` が npm に無い版の作業区画パッケージに依存していると、`scripts/release-check.mjs` が止める。
 
-`app` 3.0 は `@clavis.nexus/collatio` に依存する（いまは作業区画の写し `packages/collatio`）。`packages/app/package.json` の依存を npm に出た版に替えて（`workspace:*` を外す）から `app` を出す。照合器を替えたら `node scripts/sync-collatio.mjs` で写しと試験の見本（`packages/app/src/vectors/collatio-ops-1.json`）を取り直す。
+`app` は照合器 `@clavis.nexus/collatio` に正確な版で依存する。版を替えたら、照合器のリポジトリをその版のタグ（`vX.Y.Z`）にして `node scripts/sync-collatio.mjs` で試験の見本（`packages/app/src/vectors/collatio-ops-1.json`）を取り直す。
 
 ---
 

@@ -222,7 +222,7 @@ The proof is a digest (`holderProof`), carried so it can be matched against the 
 
 ## Cloudflare Workers and similar runtimes
 
-The SDK loads the bundled verifier on Node. On a runtime that cannot compile WASM at runtime (Cloudflare Workers, the Next.js Edge runtime and similar), pass a verifier compiled at build time in `verifiers`.
+The SDK loads the bundled verifier on Node. On a runtime that cannot compile WASM at runtime (Cloudflare Workers, the Next.js Edge runtime and similar), pass a verifier compiled at build time in `verifiers`. Add `@clavis.nexus/collatio` at the version `@clavis.nexus/app` depends on.
 
 ```ts
 import collatio from "@clavis.nexus/collatio/collatio.wasm";
@@ -236,7 +236,7 @@ const app = createAppClient({
 });
 ```
 
-`digest` is the verifier's digest (the `digest` field of `@clavis.nexus/collatio/source.json`). When the receipt names a verifier the SDK does not hold, Node checks that it is in the catalog, fetches it from the trust surface, checks the hash and uses it. On other runtimes the error is `verifier_unavailable`.
+`digest` is the digest of that `collatio.wasm`, given in the `@clavis.nexus/collatio` README (`moduleDigest` from `@clavis.nexus/collatio` computes it from the bytes). When the receipt names a verifier the SDK does not hold, Node checks that it is in the catalog, fetches it from the trust surface, checks the hash and uses it. On other runtimes the error is `verifier_unavailable`.
 
 ## Errors
 

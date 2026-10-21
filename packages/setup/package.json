@@ -1,6 +1,6 @@
 {
   "name": "@clavis.nexus/setup",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "CLI and MCP for Clavis Org and App setup (Passkey and consent steps require a human)",
   "type": "module",
   "license": "MIT",

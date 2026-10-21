@@ -17,8 +17,8 @@ importers:
   packages/app:
     dependencies:
       '@clavis.nexus/collatio':
-        specifier: workspace:*
-        version: link:../collatio
+        specifier: 1.0.1
+        version: 1.0.1
       jose:
         specifier: 6.2.3
         version: 6.2.3
@@ -47,8 +47,6 @@ importers:
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@22.19.17)(jsdom@26.1.0)(vite@7.3.7(@types/node@22.19.17))
-
-  packages/collatio: {}
 
   packages/setup:
     dependencies:
@@ -82,6 +80,10 @@ packages:
 
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
+
+  '@clavis.nexus/collatio@1.0.1':
+    resolution: {integrity: sha512-YutpFrMvKWoz+x71Aug9n9AdSz2WK+ywjjQwfHGzi7U89TuxV/XPpbIam5kbZKXJI4Am/awQkCQua+1nVQ7YQA==}
+    engines: {node: '>=20'}
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -1304,6 +1306,8 @@ snapshots:
       '@csstools/css-parser-algorithms': 3.0.5(@csstools/css-tokenizer@3.0.4)
       '@csstools/css-tokenizer': 3.0.4
       lru-cache: 10.4.3
+
+  '@clavis.nexus/collatio@1.0.1': {}
 
   '@csstools/color-helpers@5.1.0': {}
 
