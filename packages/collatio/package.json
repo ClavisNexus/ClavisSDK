@@ -1,0 +1,16 @@
+{
+  "name": "@clavis.nexus/collatio",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A copy of the Collatio host and module (scripts/sync-collatio.mjs) until @clavis.nexus/collatio is published.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./collatio.d.ts",
+      "default": "./collatio.mjs"
+    },
+    "./collatio.wasm": "./collatio.wasm",
+    "./source.json": "./source.json"
+  }
+}

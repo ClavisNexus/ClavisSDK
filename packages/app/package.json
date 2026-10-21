@@ -1,0 +1,41 @@
+{
+  "name": "@clavis.nexus/app",
+  "version": "3.0.0",
+  "description": "Server SDK for Clavis App — register signature requests and delegations, verify receipts and records with the Collatio verifier, and commit ledger records with an opening the holder can keep",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@clavis.nexus/collatio": "workspace:*",
+    "jose": "6.2.3"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.11"
+  }
+}

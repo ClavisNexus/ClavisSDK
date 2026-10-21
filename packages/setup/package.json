@@ -1,0 +1,53 @@
+{
+  "name": "@clavis.nexus/setup",
+  "version": "3.0.0",
+  "description": "CLI and MCP for Clavis Org and App setup (Passkey and consent steps require a human)",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "clavis": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "clavis": "node dist/cli.js",
+    "mcp": "node dist/mcp.js"
+  },
+  "dependencies": {
+    "@clavis.nexus/app": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "jose": "6.2.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsup": "^8.5.0",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.11"
+  }
+}

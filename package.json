@@ -1,0 +1,12 @@
+{
+  "name": "clavis-sdk",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.4",
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "audit:security": "pnpm audit --audit-level high",
+    "audit:release-age": "node scripts/audit-min-release-age.mjs"
+  }
+}
