@@ -4,6 +4,11 @@
   "description": "Browser preparation overlay for Clavis App handoff to Connect",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ClavisNexus/ClavisSDK.git",
+    "directory": "packages/app-shell"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

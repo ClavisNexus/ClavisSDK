@@ -15,35 +15,27 @@ Clavis App 向けの公開 npm パッケージ。ライセンスは MIT。
 
 ## npm 公開（メンテナ）
 
-`@clavis.nexus/*` を npm に出す手順。ルート `.npmrc` が `ignore-scripts=true` のため、`prepack` は走らない。**必ず先に build**する。公開前に各 `packages/*/package.json` の `version` を上げる。ブランチは `main`（`--publish-branch main`）。スコープは `publishConfig.access: public`。
+`@clavis.nexus/*` は GitHub Actions（`.github/workflows/publish.yml`）から npm の Trusted Publishing で出す。npm トークンは使わない。手元からは公開しない。
 
-### 個別
+1. `main` で `packages/<dir>/package.json` の `version` を上げてマージする（`X.Y.Z` のみ。npm の latest より上）
+2. `main` の該当コミットに `<dir>-v<version>` のタグを打って push する
 
-```bash
-pnpm --filter @clavis.nexus/app build
-pnpm --filter @clavis.nexus/app publish --access public --publish-branch main
+   ```bash
+   git tag app-v3.0.1 && git push origin app-v3.0.1
+   ```
 
-pnpm --filter @clavis.nexus/app-shell build
-pnpm --filter @clavis.nexus/app-shell publish --access public --publish-branch main
+3. ワークフローが検査・build・試験・pack のあと、npm に **staged** で積む。この時点では公開されない
+4. 承認する前に、Actions の実行を開いて次を確かめる
+   - タグ名と、Summary の commit が `main` 上のコミットであること
+   - `stage` ジョブの Summary の integrity が、npmjs.com の Staged Packages に出ている integrity と同じこと
+   - 中身を見るときは `npm stage download <stage-id>` で tarball を落とす
+5. npmjs.com の Staged Packages で 2FA で Approve する。要らなければ Reject
 
-pnpm --filter @clavis.nexus/setup build
-pnpm --filter @clavis.nexus/setup publish --access public --publish-branch main
-```
+公開の関門は 4〜5 の承認だけである。npm 側の Trusted Publisher は stage だけを許し（`npm publish` と `npm dist-tag` は許さない）、パッケージの Publishing access は「Require two-factor authentication and disallow tokens」にしておく。
 
-`setup` は `@clavis.nexus/app` に依存する。`app` の新版を先に公開してから `setup` を出す。
+`setup` は `@clavis.nexus/app` に依存する。`app` の新版を承認してから `setup` のタグを打つ。pack した `package.json` が npm に無い版の作業区画パッケージに依存していると、`scripts/release-check.mjs` が止める。
 
-`app` 3.0 は `@clavis.nexus/collatio` に依存する（いまは作業区画の写し `packages/collatio`）。照合器のリポジトリ（ClavisNexus/Collatio）が `@clavis.nexus/collatio` を出してから、`packages/app/package.json` の依存を出た版に替えて（`workspace:*` を外す）`app` を出す。照合器を替えたら `node scripts/sync-collatio.mjs` で写しと試験の見本（`packages/app/src/vectors/collatio-ops-1.json`）を取り直す。
-
-### 3 件一括
-
-依存順（`app` → `app-shell` → `setup`）でビルドし、同じ順で公開する。
-
-```bash
-pnpm -r build
-pnpm -r publish --access public --publish-branch main
-```
-
-確認だけなら各コマンドに `--dry-run` を付ける。OTP が要るときは `--otp <code>`。
+`app` 3.0 は `@clavis.nexus/collatio` に依存する（いまは作業区画の写し `packages/collatio`）。`packages/app/package.json` の依存を npm に出た版に替えて（`workspace:*` を外す）から `app` を出す。照合器を替えたら `node scripts/sync-collatio.mjs` で写しと試験の見本（`packages/app/src/vectors/collatio-ops-1.json`）を取り直す。
 
 ---
 

@@ -4,6 +4,11 @@
   "description": "CLI and MCP for Clavis Org and App setup (Passkey and consent steps require a human)",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ClavisNexus/ClavisSDK.git",
+    "directory": "packages/setup"
+  },
   "engines": {
     "node": ">=20"
   },
