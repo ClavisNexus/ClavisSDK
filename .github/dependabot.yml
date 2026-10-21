@@ -11,6 +11,9 @@ updates:
       # tsup writes the .d.ts files through the TypeScript JavaScript API, which TypeScript 7 does not ship
       - dependency-name: typescript
         versions: [">=7"]
+      # Node's types stay on the oldest Node the packages support, so newer APIs fail the typecheck
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
