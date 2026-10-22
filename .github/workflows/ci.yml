@@ -24,7 +24,7 @@ jobs:
           version: 10.34.4
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - run: node scripts/audit-min-release-age.mjs
 
   audit:
@@ -39,7 +39,7 @@ jobs:
           version: 10.34.4
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - run: pnpm run audit:security
 
   check:
@@ -56,7 +56,7 @@ jobs:
           version: 10.34.4
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # @clavis.nexus/setup resolves @clavis.nexus/app through its dist

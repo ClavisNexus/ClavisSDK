@@ -1,6 +1,6 @@
 # `@clavis.nexus/app`
 
-Server SDK for Node 20 and later (ESM). The browser handoff shell is [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
+Server SDK for Node 24 and later (ESM). The browser handoff shell is [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
 
 Pass a SHA-256 digest as Base64URL (43 characters) in `messageDigest`. The caller prepares that string. The user signs the statement `app.sign@1`, which Clavis builds from it, with a passkey. Store the registration response's `pollSecret` on your server, and read completion with `getStatus` or `waitForCompletion`. A completion carries an app receipt (`receipt.app@1`).
 

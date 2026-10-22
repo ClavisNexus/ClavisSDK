@@ -17,5 +17,4 @@ trustPolicy: no-downgrade
 # Published by their maintainers without provenance after earlier-published versions had it (pnpm judges by publish date).
 trustPolicyExclude:
   - "chokidar@4.0.3"
-  - "undici-types@6.21.0"
 blockExoticSubdeps: true
