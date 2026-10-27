@@ -3,7 +3,7 @@ import { CATALOG_STALE_MS, TrustSurface } from "./trust.js";
 
 const MASTER = { kty: "EC", crv: "P-256", x: "x", y: "y" } as JsonWebKey;
 
-describe("trust surface freshness (genesis.md §10.1)", () => {
+describe("trust surface freshness", () => {
   it("counts staleness from the last successful fetch, not from the catalog's signature", async () => {
     let up = true;
     const fetchImpl = (async (url: string | URL | Request) => {

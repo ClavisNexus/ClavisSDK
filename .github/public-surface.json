@@ -1,0 +1,9 @@
+{
+  "skip": ["packages/app/src/vectors/"],
+  "allowRefs": [
+    "docs/engineering/git-workflow.md",
+    "docs/engineering/public-surfaces.md",
+    "tools/genesis-vectors.mjs",
+    "repro/run.sh"
+  ]
+}

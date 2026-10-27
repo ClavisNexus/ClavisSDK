@@ -1,5 +1,25 @@
 # エージェント向けの指示
 
+## 公開
+
+このリポジトリは公開する前提で書く。npm の `@clavis.nexus/*` はすでに公開されており、source map でソースも読める。PR のタイトルと本文（編集の履歴を含む）、コミット文、Actions のログと job summary も、リポを公開した時点で誰でも読める。
+
+- 見知らぬ人が読んでよいことだけを書く。秘密、公開済みの窓口以外の連絡先、手元のマシンのパスを書かない
+- ここから辿れるものだけを引く。このリポのファイル、Collatio などの公開リポ（リポ名を添える）、`https://docs.clavis.nexus` などの公開ページ。非公開リポの設計正本の名前と節番号、パスは書かない
+- `.github/public-surface.mjs` が CI でファイルを、publish で pack した tarball を確かめる。リポの外を指してよいものは `.github/public-surface.json` の `allowRefs` に足す。スクリプトに分からないもの（内部語・予定）は ClavisNexus の `docs/engineering/public-surfaces.md` に並べてある。スクリプトは公開リポで同じ内容なので、直すときは全部を同じブランチ名で直す
+
+## 公開パッケージの文案
+
+`packages/*` の README・`package.json` の `description`・CLI ヘルプ・MCP ツールの説明・公開 export の JSDoc・エンドユーザー向けの UI 文言は、App を組み込む開発者と developers で Org／App を用意する契約者が読む。
+
+- 出してよい: 顧客が触る製品語（Clavis、Connect、developers、Org、App、Passkey、API としての Intent）、公開 API の識別子（`operate`、`master`、`message_digest`、`consume_url`、`poll_secret` など）、`https://docs.clavis.nexus` と npm 上の他の `@clavis.nexus/*`、呼び出し側が次の一手を決めるのに必要な事実（TTL、必須 env、エラー `code`）
+- 出さない: 上の「公開」で書かないもの、プラットフォームの内部語を顧客向けの説明に持ち込むこと、顧客向けの本番／開発／staging の区分（Clavis にその区分はない）、売り文句、実装段階名を行為名にすること、ワークスペース内だけのパスや `pnpm --filter` を公開 README の手順の本体にすること
+- 読み手（組み込む開発者／契約者）を混ぜない。見出しの下は範囲の一文まで。手順は写せるコマンド／JSON／HTTP を本体にする
+- 「〜ではない」で偽友を潰さない。偽友はラベルか区画で解く
+- 決済ベンダー名を手続ヒントの主語にしない（「カードの Checkout」など顧客が行う行為で書く）
+- 日本語と英語を併記するときは直訳しない。キーは共有し、文面は各言語で書く
+- 公開面を直したら、同じ変更で `package.json` の `description` と MCP／CLI の説明も顧客向けの語に揃える
+
 ## Git
 
 commit・push・PR の作成と merge・タグの push は、人の確認を待たずにエージェント（Claude Code・Cursor）が行う。事故は下の ruleset とフックが止め、エージェントの縛りに触れた変更は週次の `Agent watch` が人に並べる。正本は ClavisNexus の `docs/engineering/git-workflow.md`。
