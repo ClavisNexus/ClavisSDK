@@ -143,7 +143,7 @@ Stored records can be checked again with `app.verifier.verifyMandateHistory({ gr
 
 ## Agreements
 
-Ask a user to agree to a step of your app — your terms, your privacy notice, marketing, sharing with a third party — on Connect, and check before an action that the agreement is in force and on today's terms. Clavis builds what the user is shown from your app's profile in developers (your documents, purposes and recipients) and keeps the decision. A grant or a reconsent is signed with the user's passkey; a decline or a withdrawal is not.
+Ask a user to agree to a step of your app — your terms, your privacy notice, marketing, sharing with a third party — on Connect, and check before an action that the agreement is in force and on today's terms. Clavis builds what the user is shown from your app's agreement profile (your documents, purposes and recipients, set with `@clavis.nexus/setup`: `app-lex-document` and `app-lex-profile-set`) and keeps the decision. Turn on “Agreements” under the app's allowed Intents first. A grant or a reconsent is signed with the user's passkey; a decline or a withdrawal is not.
 
 ```ts
 const { requestId, pollSecret, consumeUrl, agreement } = await app.registerAgreement({
