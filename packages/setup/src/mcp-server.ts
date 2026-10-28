@@ -303,6 +303,37 @@ const TOOLS = [
     },
   },
   {
+    name: "clavis_lex_decision",
+    description: "Read one agreement decision by the decision_id the App received: its record, its ledger proof and where it stands now.",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, decision_id: { type: "string" } },
+      required: ["org_id", "decision_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "clavis_lex_subject_decisions",
+    description: "List every agreement decision the Org holds for one person (subject is their ID in the Org's App), to answer that person's request.",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, subject: { type: "string" } },
+      required: ["org_id", "subject"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "clavis_lex_subject_erase",
+    description:
+      "Erase one person's agreement decisions now, as the Org's instruction for that person's erasure request. Needs the owner's or admin's Passkey, cannot be undone, and is refused while the records are under a hold. Run it only when the Org has decided to erase.",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, subject: { type: "string" } },
+      required: ["org_id", "subject"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "clavis_emit_app_env",
     description: "Emit environment variables for @clavis.nexus/app after setup. Needs CLAVIS_TRUST_ROOT (the Clavis Master public JWK) in the environment.",
     inputSchema: {
@@ -406,6 +437,12 @@ async function dispatch(client: SetupClient, name: string, args: Record<string, 
       return client.lexExportStatus({ orgId: String(args.org_id), jobId: String(args.job_id) });
     case "clavis_lex_export_download":
       return client.lexExportDownload({ orgId: String(args.org_id), jobId: String(args.job_id), dir: String(args.dir) });
+    case "clavis_lex_decision":
+      return client.lexDecision({ orgId: String(args.org_id), decisionId: String(args.decision_id) });
+    case "clavis_lex_subject_decisions":
+      return client.lexSubjectDecisions({ orgId: String(args.org_id), subject: String(args.subject) });
+    case "clavis_lex_subject_erase":
+      return client.lexSubjectErase({ orgId: String(args.org_id), subject: String(args.subject) });
     case "clavis_emit_app_env":
       return client.emitEnv({
         appId: String(args.app_id),

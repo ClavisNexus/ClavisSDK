@@ -31,6 +31,9 @@ function usage(): never {
   clavis lex-exports <orgId>
   clavis lex-export-status <orgId> <jobId>
   clavis lex-export-download <orgId> <jobId> --dir D
+  clavis lex-decision <orgId> <decisionId>
+  clavis lex-subject-decisions <orgId> <subject>
+  clavis lex-subject-erase <orgId> <subject>
   clavis emit-env --app A
 
 login: opens developers /setup/login, then paste the JSON from the page (or pass --bridge-json-file).
@@ -44,6 +47,7 @@ Secrets stay in ~/.config/clavis/apps/<appId>/ (mode 0600). Command output inclu
 app-regions-set chooses where the App accepts new connections from: JP, US, GB, EEA (comma-separated). --all accepts every region Clavis accepts. People already connected keep using the App.
 app-lex-document has Clavis take a snapshot of the org's terms or privacy notice (from the App's confirmed host or the org's domain); put the sha256 it returns in the profile's documents. app-lex-profile-set sets what Connect shows when the App asks for an agreement, with Passkey (--clear removes it).
 lex-export starts an export of agreement records: request.json is { "kind": "decisions" | "subject", "query": {...}, "expiring_within_days"?: N, "records"?: true }. Many people's records (decisions) need Passkey; one person's (subject, with query.subject_ref) does not. lex-export-download writes the files at mode 0600 under D/<jobId>/ after checking each against the manifest and the manifest against the digest anchored on the ledger.
+lex-decision reads one agreement decision by the decision_id your App received. lex-subject-decisions lists every decision for one person (subject is their ID in your App). lex-subject-erase erases that person's decisions now, with Passkey; it cannot be undone and is held while the records are under a hold.
 declaration-set replaces the App's current declaration. Pass every use to keep. status reports the signature card and the place of incorporation. Ledger subscription is on developers.
 
 Env: CLAVIS_API_ORIGIN CLAVIS_ID_ORIGIN CLAVIS_DEVELOPERS_ORIGIN CLAVIS_SESSION_PATH
@@ -248,6 +252,24 @@ async function main(): Promise<void> {
       const [orgId, jobId] = positionals(rest, ["--dir"]);
       if (!orgId || !jobId) usage();
       printJson(await client.lexExportDownload({ orgId, jobId, dir: requireFlag(rest, "--dir") }));
+      return;
+    }
+    case "lex-decision": {
+      const [orgId, decisionId] = rest;
+      if (!orgId || !decisionId) usage();
+      printJson(await client.lexDecision({ orgId, decisionId }));
+      return;
+    }
+    case "lex-subject-decisions": {
+      const [orgId, subject] = rest;
+      if (!orgId || !subject) usage();
+      printJson(await client.lexSubjectDecisions({ orgId, subject }));
+      return;
+    }
+    case "lex-subject-erase": {
+      const [orgId, subject] = rest;
+      if (!orgId || !subject) usage();
+      printJson(await client.lexSubjectErase({ orgId, subject }));
       return;
     }
     case "emit-env":

@@ -29,6 +29,7 @@ import {
   orgAppVerifyHostStatement,
   orgCardCheckoutStatement,
   orgCardIncorporationStatement,
+  orgLexSubjectEraseStatement,
   orgPolicyBootstrapStatement,
   sameStatement,
   type Statement,
@@ -206,6 +207,15 @@ export type SetupClient = {
     jobId: string;
     dir: string;
   }): Promise<SetupResult<{ dir: string; manifest_digest: string; files: { path: string; bytes: number }[] }>>;
+  /** One agreement decision: its record, its ledger proof and where it stands now (`lifecycle`) */
+  lexDecision(args: { orgId: string; decisionId: string }): Promise<SetupResult<Record<string, unknown>>>;
+  /** Every agreement decision the org holds for one person (their ID in the org's apps), to answer that person's request */
+  lexSubjectDecisions(args: { orgId: string; subject: string }): Promise<SetupResult<Record<string, unknown>>>;
+  /**
+   * Erase one person's agreement decisions now, with an owner's or admin's passkey: the org's instruction, for that
+   * person's erasure request. The ledger leaves stay and no longer lead to anything. It cannot be undone
+   */
+  lexSubjectErase(args: { orgId: string; subject: string }): Promise<SetupResult<{ erased: number; decision_ids: string[] }>>;
   emitEnv(args: {
     appId: string;
     operatePrivateJwkJson?: string;
@@ -220,6 +230,10 @@ export type SetupClient = {
 };
 
 type RequireSession = { session: DevelopersSession; origins: SetupOrigins };
+
+/** A person's ID in the org's apps, as Clavis takes it */
+const LEX_SUBJECT = /^[A-Za-z0-9._:-]{1,128}$/;
+const LEX_DECISION_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
 /** The paths a finished export holds (the manifest names them) */
 const LEX_EXPORT_PATH = /^(manifest\.json|anchor\.json|items\/\d{5}\.jsonl|decisions\/[A-Za-z0-9._:-]{1,128}\.json)$/;
@@ -243,7 +257,9 @@ function lexRefusal(e: unknown): { ok: false; error: string } | null {
     case "FORBIDDEN":
       return { ok: false, error: "forbidden — only an owner or admin of the Org can do this." };
     case "NOT_FOUND":
-      return { ok: false, error: "not_found — the Org, the App or the export was not found, or this is not open to the Org yet." };
+      return { ok: false, error: "not_found — the Org, the App, the export or the decision was not found, or this is not open to the Org yet." };
+    case "ORG_HOLD":
+      return { ok: false, error: "org_hold — these records are preserved under a hold, so erasure waits until the hold ends. Nothing was erased." };
     default:
       return null;
   }
@@ -962,6 +978,55 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
           ok: true,
           data: { dir: root, manifest_digest: job.manifest_digest, files: fetched.map((f) => ({ path: f.path, bytes: f.bytes.byteLength })) },
         };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexDecision(args) {
+      if (!LEX_DECISION_ID.test(args.decisionId)) return { ok: false, error: "decision_id_invalid — pass the decision_id Clavis returned for the agreement." };
+      const auth = await requireSession({ origins, sessionPath });
+      if (!auth.ok) return auth;
+      try {
+        return { ok: true, data: await api.getLexDecision(auth.data.origins.apiOrigin, auth.data.session.accessToken, args.orgId, args.decisionId) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexSubjectDecisions(args) {
+      if (!LEX_SUBJECT.test(args.subject)) return { ok: false, error: "subject_invalid — pass the person's ID in your App (the sub you passed as allowedSub)." };
+      const auth = await requireSession({ origins, sessionPath });
+      if (!auth.ok) return auth;
+      try {
+        return { ok: true, data: await api.getLexSubjectDecisions(auth.data.origins.apiOrigin, auth.data.session.accessToken, args.orgId, args.subject) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexSubjectErase(args) {
+      if (!LEX_SUBJECT.test(args.subject)) return { ok: false, error: "subject_invalid — pass the person's ID in your App (the sub you passed as allowedSub)." };
+      const auth = await requireSession({ origins, sessionPath });
+      if (!auth.ok) return auth;
+      const apiOrigin = auth.data.origins.apiOrigin;
+      const bearer = auth.data.session.accessToken;
+      try {
+        const cer = await runPasskeyCeremony({
+          origins: auth.data.origins,
+          bearer,
+          statement: orgLexSubjectEraseStatement({ org: args.orgId, subject: args.subject }),
+          displayHint: "Erase one person's agreement records",
+          openBrowserFlag,
+        });
+        const proof = await cer.wait();
+        return { ok: true, data: await api.postLexSubjectErase(apiOrigin, bearer, args.orgId, args.subject, proof) };
       } catch (e) {
         const refusal = lexRefusal(e);
         if (refusal) return refusal;

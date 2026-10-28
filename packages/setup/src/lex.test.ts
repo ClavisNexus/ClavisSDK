@@ -161,3 +161,41 @@ describe("exports of agreement records", () => {
     expect(await client().lexExportDownload({ orgId: ORG, jobId: JOB, dir })).toMatchObject({ ok: false, error: expect.stringContaining("export_not_done") });
   });
 });
+
+describe("one person's agreement records", () => {
+  it("reads one decision and one person's decisions without a passkey", async () => {
+    stubApi((c) => {
+      if (c.path === `/orgs/${ORG}/lex/decisions/d-1`) return { body: { decision_id: "d-1", lifecycle: "open" } };
+      if (c.path === `/orgs/${ORG}/lex/subjects/p-1/decisions`) return { body: { decisions: [{ decision_id: "d-1" }] } };
+      return undefined;
+    });
+    expect(await client().lexDecision({ orgId: ORG, decisionId: "d-1" })).toEqual({ ok: true, data: { decision_id: "d-1", lifecycle: "open" } });
+    expect(await client().lexSubjectDecisions({ orgId: ORG, subject: "p-1" })).toEqual({ ok: true, data: { decisions: [{ decision_id: "d-1" }] } });
+    expect(calls.some((c) => c.path.startsWith("/webauthn/"))).toBe(false);
+  });
+
+  it("erases one person's decisions with a passkey over the erase statement", async () => {
+    stubApi(
+      (c) =>
+        ceremony(c) ??
+        (c.method === "POST" && c.path === `/orgs/${ORG}/lex/subjects/p-1/erase` ? { body: { erased: 2, decision_ids: ["d-1", "d-2"] } } : undefined),
+    );
+    expect(await client().lexSubjectErase({ orgId: ORG, subject: "p-1" })).toEqual({ ok: true, data: { erased: 2, decision_ids: ["d-1", "d-2"] } });
+    expect(calls.find((c) => c.path === "/webauthn/authentication/ceremony/start")?.body).toMatchObject({
+      statement: { type: "org.lex.subject_erase@1", org: ORG, subject: "p-1" },
+    });
+    expect(calls.find((c) => c.path.endsWith("/erase"))?.body).toEqual({ receipt: RECEIPT });
+  });
+
+  it("says nothing was erased while the records are under a hold", async () => {
+    stubApi((c) => ceremony(c) ?? (c.path.endsWith("/erase") ? { status: 409, body: { error: "ORG_HOLD", message: "x" } } : undefined));
+    expect(await client().lexSubjectErase({ orgId: ORG, subject: "p-1" })).toMatchObject({ ok: false, error: expect.stringContaining("org_hold") });
+  });
+
+  it("refuses an ID Clavis does not take before any request", async () => {
+    stubApi(() => undefined);
+    expect(await client().lexSubjectErase({ orgId: ORG, subject: "a b" })).toMatchObject({ ok: false, error: expect.stringContaining("subject_invalid") });
+    expect(await client().lexDecision({ orgId: ORG, decisionId: "../x" })).toMatchObject({ ok: false, error: expect.stringContaining("decision_id_invalid") });
+    expect(calls).toEqual([]);
+  });
+});

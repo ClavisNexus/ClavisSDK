@@ -369,6 +369,31 @@ export async function getLexExport(apiOrigin: string, bearer: string, orgId: str
   return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/exports/${encodeURIComponent(jobId)}`, { bearer });
 }
 
+/** GET /orgs/:org/lex/decisions/:decision_id — one decision with its record, its ledger proof and where it stands now. */
+export async function getLexDecision(apiOrigin: string, bearer: string, orgId: string, decisionId: string): Promise<Record<string, unknown>> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/decisions/${encodeURIComponent(decisionId)}`, { bearer });
+}
+
+/** GET /orgs/:org/lex/subjects/:subject/decisions — every decision the org holds for one person. */
+export async function getLexSubjectDecisions(apiOrigin: string, bearer: string, orgId: string, subject: string): Promise<Record<string, unknown>> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/subjects/${encodeURIComponent(subject)}/decisions`, { bearer });
+}
+
+/** POST /orgs/:org/lex/subjects/:subject/erase — the org's instruction to erase one person's decisions, with a passkey. */
+export async function postLexSubjectErase(
+  apiOrigin: string,
+  bearer: string,
+  orgId: string,
+  subject: string,
+  receipt: Receipt,
+): Promise<{ erased: number; decision_ids: string[] }> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/subjects/${encodeURIComponent(subject)}/erase`, {
+    method: "POST",
+    bearer,
+    body: { receipt },
+  });
+}
+
 /** One file of a finished export, as the bytes Clavis wrote. */
 export async function getLexExportFile(apiOrigin: string, bearer: string, orgId: string, jobId: string, path: string): Promise<Uint8Array> {
   const res = await fetch(

@@ -152,6 +152,18 @@ clavis lex-export-download <orgId> <jobId> --dir ./exports
 - `lex-export-download` writes the files at mode 0600 under `<dir>/<jobId>/` — they hold people's records — after checking each file against the manifest and the manifest against the digest Clavis anchored on your organisation's ledger. An export is kept for 7 days.
 - In MCP: `clavis_lex_counts`, `clavis_lex_export`, `clavis_lex_exports`, `clavis_lex_export_status` and `clavis_lex_export_download`.
 
+### One person's agreement records
+
+```bash
+clavis lex-decision <orgId> <decisionId>
+clavis lex-subject-decisions <orgId> <subject>
+clavis lex-subject-erase <orgId> <subject>
+```
+
+- `subject` is the person's ID in your app (the `sub` you passed as `allowedSub`). `lex-decision` takes the `decisionId` your app received when the agreement completed.
+- `lex-subject-erase` erases that person's decisions now, as your organisation's instruction for their erasure request. It needs an owner's or admin's passkey and cannot be undone. The leaves on your ledger stay and no longer lead to anything. While the records are under a hold, it is refused (`error` starts with `org_hold`) and nothing is erased.
+- In MCP: `clavis_lex_decision`, `clavis_lex_subject_decisions` and `clavis_lex_subject_erase`.
+
 ### What this CLI covers
 
 - `clavis status` returns the Org, apps, host confirmation, the use declaration, the app's accepted regions (`accepted_regions` only when the list is narrowed), the signature card (`signature_card_blockers` is what holds it back) and the place of incorporation. Check the ledger subscription on developers.
