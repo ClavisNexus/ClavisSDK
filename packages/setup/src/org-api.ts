@@ -288,3 +288,100 @@ export async function checkTrustRoot(apiOrigin: string, trustRootJson: string): 
   await createVerifier({ trustRoot: trustRootJson, apiOrigin }).trust();
   return JSON.stringify(JSON.parse(trustRootJson));
 }
+
+/** POST /orgs/:org/apps/:app/lex-documents — Clavis takes a snapshot of the org's terms or privacy notice. */
+export async function postAppLexDocument(
+  apiOrigin: string,
+  bearer: string,
+  orgId: string,
+  appId: string,
+  url: string,
+): Promise<Record<string, unknown>> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/apps/${encodeURIComponent(appId)}/lex-documents`, {
+    method: "POST",
+    bearer,
+    body: { url },
+  });
+}
+
+/** POST /orgs/:org/apps/:app/lex-profile/statement — the statement setting this profile signs, and the profile as stored. */
+export async function postAppLexProfileStatement(
+  apiOrigin: string,
+  bearer: string,
+  orgId: string,
+  appId: string,
+  profile: unknown,
+): Promise<{ statement: Record<string, unknown> & { type: string }; profile: unknown }> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/apps/${encodeURIComponent(appId)}/lex-profile/statement`, {
+    method: "POST",
+    bearer,
+    body: { profile },
+  });
+}
+
+export async function putAppLexProfile(
+  apiOrigin: string,
+  bearer: string,
+  orgId: string,
+  appId: string,
+  args: { profile: unknown; receipt: Receipt },
+): Promise<{ app_id: string; lex_profile: unknown }> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/apps/${encodeURIComponent(appId)}/lex-profile`, {
+    method: "PUT",
+    bearer,
+    body: { profile: args.profile, receipt: args.receipt },
+  });
+}
+
+/** POST /orgs/:org/lex/decisions/counts — how many agreement decisions a query matches. */
+export async function postLexDecisionCounts(apiOrigin: string, bearer: string, orgId: string, query: unknown): Promise<Record<string, unknown>> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/decisions/counts`, { method: "POST", bearer, body: { query } });
+}
+
+/** POST /orgs/:org/lex/exports/statement — what starting this export signs (null for one person's export). */
+export async function postLexExportStatement(
+  apiOrigin: string,
+  bearer: string,
+  orgId: string,
+  request: unknown,
+): Promise<{ statement: (Record<string, unknown> & { type: string }) | null; request_digest: string; request: unknown }> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/exports/statement`, { method: "POST", bearer, body: { request } });
+}
+
+export async function postLexExport(
+  apiOrigin: string,
+  bearer: string,
+  orgId: string,
+  args: { request: unknown; receipt?: Receipt },
+): Promise<{ job: Record<string, unknown> }> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/exports`, {
+    method: "POST",
+    bearer,
+    body: { request: args.request, ...(args.receipt !== undefined ? { receipt: args.receipt } : {}) },
+  });
+}
+
+export async function getLexExports(apiOrigin: string, bearer: string, orgId: string): Promise<{ jobs: unknown[] }> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/exports`, { bearer });
+}
+
+export async function getLexExport(apiOrigin: string, bearer: string, orgId: string, jobId: string): Promise<{ job: Record<string, unknown>; anchor?: unknown }> {
+  return apiJson(apiOrigin, `/orgs/${encodeURIComponent(orgId)}/lex/exports/${encodeURIComponent(jobId)}`, { bearer });
+}
+
+/** One file of a finished export, as the bytes Clavis wrote. */
+export async function getLexExportFile(apiOrigin: string, bearer: string, orgId: string, jobId: string, path: string): Promise<Uint8Array> {
+  const res = await fetch(
+    `${apiOrigin.replace(/\/+$/, "")}/orgs/${encodeURIComponent(orgId)}/lex/exports/${encodeURIComponent(jobId)}/files/${path
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}`,
+    { redirect: "error", headers: { Authorization: `Bearer ${bearer}` } },
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    const code = typeof body?.error === "string" ? body.error : `HTTP_${res.status}`;
+    throw new SetupApiError(res.status, code, typeof body?.message === "string" ? body.message : code);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+}

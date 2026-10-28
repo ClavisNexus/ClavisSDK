@@ -234,6 +234,75 @@ const TOOLS = [
     },
   },
   {
+    name: "clavis_app_lex_document",
+    description:
+      "Have Clavis take a snapshot of the org's terms or privacy notice from the App's confirmed host or the org's domain. Put the sha256 it returns in the agreement profile's documents.",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, app_id: { type: "string" }, url: { type: "string" } },
+      required: ["org_id", "app_id", "url"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "clavis_app_lex_profile_set",
+    description:
+      "Set what Connect shows when the App asks a user for an agreement (version, service_name, documents, purposes, destinations, terminal_categories), or clear it with profile null. Needs the human's Passkey (returns needs_human: passkey while waiting).",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, app_id: { type: "string" }, profile: { type: ["object", "null"] } },
+      required: ["org_id", "app_id", "profile"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "clavis_lex_counts",
+    description: "Count the org's agreement decisions a query matches (period from/to, app_id, use_case, outcome, pack_id, template, requirement, versions), by outcome, stop reason and pack.",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, query: { type: "object" } },
+      required: ["org_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "clavis_lex_export",
+    description:
+      "Start an export of the org's agreement records. request: { kind: decisions | subject, query, expiring_within_days?, records? }. Many people's records (decisions) need the human's Passkey; one person's (subject, with query.subject_ref) does not. One export runs at a time.",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, request: { type: "object" } },
+      required: ["org_id", "request"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "clavis_lex_exports",
+    description: "List the org's exports of agreement records, newest first.",
+    inputSchema: { type: "object", properties: { org_id: { type: "string" } }, required: ["org_id"], additionalProperties: false },
+  },
+  {
+    name: "clavis_lex_export_status",
+    description: "Read one export: its state, its files once done, and where its manifest stands on the org's ledger.",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, job_id: { type: "string" } },
+      required: ["org_id", "job_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "clavis_lex_export_download",
+    description:
+      "Fetch a finished export into dir/<job_id>/ (files at mode 0600: they hold people's records), checking each file against the manifest and the manifest against the digest anchored on the ledger.",
+    inputSchema: {
+      type: "object",
+      properties: { org_id: { type: "string" }, job_id: { type: "string" }, dir: { type: "string" } },
+      required: ["org_id", "job_id", "dir"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "clavis_emit_app_env",
     description: "Emit environment variables for @clavis.nexus/app after setup. Needs CLAVIS_TRUST_ROOT (the Clavis Master public JWK) in the environment.",
     inputSchema: {
@@ -323,6 +392,20 @@ async function dispatch(client: SetupClient, name: string, args: Record<string, 
         endUsers: String(args.end_users),
         uses: args.uses as { capability: string; operation: string }[],
       });
+    case "clavis_app_lex_document":
+      return client.appLexDocument({ orgId: String(args.org_id), appId: String(args.app_id), url: String(args.url) });
+    case "clavis_app_lex_profile_set":
+      return client.appLexProfileSet({ orgId: String(args.org_id), appId: String(args.app_id), profile: args.profile ?? null });
+    case "clavis_lex_counts":
+      return client.lexCounts({ orgId: String(args.org_id), query: args.query ?? {} });
+    case "clavis_lex_export":
+      return client.lexExport({ orgId: String(args.org_id), request: args.request });
+    case "clavis_lex_exports":
+      return client.lexExports({ orgId: String(args.org_id) });
+    case "clavis_lex_export_status":
+      return client.lexExportStatus({ orgId: String(args.org_id), jobId: String(args.job_id) });
+    case "clavis_lex_export_download":
+      return client.lexExportDownload({ orgId: String(args.org_id), jobId: String(args.job_id), dir: String(args.dir) });
     case "clavis_emit_app_env":
       return client.emitEnv({
         appId: String(args.app_id),
