@@ -47,7 +47,12 @@ export type AppClientErrorCode =
   | "mandate_failed"
   | "invalid_mandate_record"
   | "invalid_on_behalf"
-  | "on_behalf_mismatch";
+  | "on_behalf_mismatch"
+  | "invalid_agreement"
+  | "agreement_mismatch"
+  | "invalid_agreement_state"
+  | "agreement_state_failed"
+  | "agreement_required";
 
 export type AppClientErrorDetails = {
   /** The `error` in the API response body, for example `RETURN_URL_NOT_ALLOWED`. */
@@ -58,6 +63,8 @@ export type AppClientErrorDetails = {
   traceId?: string;
   /** Why the use fell outside the delegation's terms (`mandate_outside`), in the order of `MANDATE_VIOLATIONS`. */
   violations?: string[];
+  /** Why `requireAgreement` refused: no agreement in force (`none`), or one given on terms that changed since (`reconsent_required`) */
+  agreement?: "none" | "reconsent_required";
   /** The verifier's reason for refusing (`receipt_invalid`, `invalid_mandate_record`, `ledger_bundle_invalid` and the rest), named as the verifier's ABI names it */
   verifierReason?: string;
   /** The original exception a check or a fetch threw. */
@@ -72,6 +79,8 @@ export class AppClientError extends Error {
   readonly traceId?: string;
   readonly violations?: string[];
   readonly verifierReason?: string;
+  /** For `agreement_required`: `none` or `reconsent_required` */
+  readonly agreement?: "none" | "reconsent_required";
 
   constructor(code: AppClientErrorCode, message: string, status?: number, details?: AppClientErrorDetails) {
     super(message, details?.cause !== undefined ? { cause: details.cause } : undefined);
@@ -83,5 +92,6 @@ export class AppClientError extends Error {
     if (details?.traceId !== undefined) this.traceId = details.traceId;
     if (details?.violations !== undefined) this.violations = details.violations;
     if (details?.verifierReason !== undefined) this.verifierReason = details.verifierReason;
+    if (details?.agreement !== undefined) this.agreement = details.agreement;
   }
 }

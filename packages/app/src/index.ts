@@ -70,6 +70,30 @@ export type {
   MandateUseRequest,
   MandateViolation,
 } from "./mandate.js";
+export {
+  AGREEMENT_AGE_BANDS,
+  AGREEMENT_AGE_METHODS,
+  AGREEMENT_CEREMONIES,
+  AGREEMENT_STATEMENT,
+  AGREEMENT_USE_CASES,
+} from "./agreement.js";
+export type {
+  AgreementAction,
+  AgreementAgeBand,
+  AgreementAgeMethod,
+  AgreementCeremony,
+  AgreementState,
+  AgreementStatusCompleted,
+  AgreementUseCase,
+  ExpectedAgreement,
+} from "./agreement.js";
+export type {
+  AgreementStateInput,
+  AgreementStatus,
+  RegisterAgreementInput,
+  RegisterAgreementResult,
+  WaitForAgreementOptions,
+} from "./client.js";
 export { APP_SIGN_ON_BEHALF, normalizeOnBehalfDomain, readOnBehalf } from "./on-behalf.js";
 export type { OnBehalf } from "./on-behalf.js";
 export { digestOf } from "./digest.js";

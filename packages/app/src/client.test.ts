@@ -410,6 +410,11 @@ describe("public exports", () => {
   it("exposes the client, the verifier, the request builders and the error type", async () => {
     const sdk = await import("./index.js");
     expect(Object.keys(sdk).sort()).toEqual([
+      "AGREEMENT_AGE_BANDS",
+      "AGREEMENT_AGE_METHODS",
+      "AGREEMENT_CEREMONIES",
+      "AGREEMENT_STATEMENT",
+      "AGREEMENT_USE_CASES",
       "APP_SIGN_ON_BEHALF",
       "AppClientError",
       "MANDATE_CLOSE_REASONS",
