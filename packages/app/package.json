@@ -35,12 +35,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@clavis.nexus/collatio": "1.0.1",
-    "jose": "6.2.12"
+    "@clavis.nexus/collatio": "1.0.2",
+    "jose": "6.2.13"
   },
   "devDependencies": {
     "tsup": "^8.5.0",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.5"
   }
 }
