@@ -35,7 +35,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@clavis.nexus/collatio": "1.0.1",
+    "@clavis.nexus/collatio": "1.0.2",
     "jose": "6.2.12"
   },
   "devDependencies": {
