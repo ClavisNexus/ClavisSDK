@@ -28,7 +28,7 @@ describe("statements", () => {
 
   it("payload digest names its type and strips the proposer receipt", async () => {
     const a = await orgPayloadDigest({ v: 1, host: "a.example.com" });
-    const b = await orgPayloadDigest({ v: 1, host: "a.example.com", proposer_receipt: { type: "receipt@1" } });
+    const b = await orgPayloadDigest({ v: 1, host: "a.example.com", proposer_receipt: { type: "receipt@2" } });
     expect(a).toBe(b);
     expect(a).toBe(await digestOf({ type: "org.payload@1", value: { v: 1, host: "a.example.com" } }));
     expect(orgAppRegisterStatement({ org: ORG, payload: a })).toEqual({ type: "org.app.register@1", org: ORG, payload: a });
@@ -51,9 +51,10 @@ describe("statements", () => {
 
 describe("receiptFromCeremonyPayload", () => {
   it("keeps the holder receipt as the string Clavis returned, and refuses anything else", () => {
-    const text = '{"type":"receipt@1","statement":{"type":"org.policy.bootstrap@1"}}';
+    const text = '{"type":"receipt@2","statement":{"type":"org.policy.bootstrap@1"}}';
     expect(receiptFromCeremonyPayload(text)).toBe(text);
-    expect(() => receiptFromCeremonyPayload({ type: "receipt@1", statement: { type: "org.policy.bootstrap@1" } })).toThrow(/receipt/);
+    expect(() => receiptFromCeremonyPayload('{"type":"receipt@1","statement":{"type":"org.policy.bootstrap@1"}}')).toThrow(/receipt/);
+    expect(() => receiptFromCeremonyPayload({ type: "receipt@2", statement: { type: "org.policy.bootstrap@1" } })).toThrow(/receipt/);
     expect(() => receiptFromCeremonyPayload("")).toThrow(/receipt/);
     expect(() => receiptFromCeremonyPayload(null)).toThrow(/receipt/);
   });

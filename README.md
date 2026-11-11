@@ -4,11 +4,11 @@ Clavis App 向けの公開 npm パッケージ。ライセンスは MIT。
 
 | ディレクトリ | npm 名 | 役割 |
 |---|---|---|
-| `packages/app` | `@clavis.nexus/app` | サーバ SDK。署名依頼の登録、status、webhook ping、台帳への記録と証拠束。受領・委任の記録・証拠束は照合器 Collatio で確かめる |
-| `packages/app-shell` | `@clavis.nexus/app-shell` | ブラウザの準備オーバーレイ（Connect へ渡すまで） |
+| `packages/app` | `@clavis.nexus/app` | サーバ SDK。リレーへの署名、委任の実行、台帳への記録と証拠束。照合器 Collatio が答える受領と記録を確かめる |
+| `packages/app-shell` | `@clavis.nexus/app-shell` | ブラウザの準備オーバーレイ（署名依頼の登録まで） |
 | `packages/setup` | `@clavis.nexus/setup` | developers 向けセットアップ CLI／MCP（Passkey と同意は人間） |
 
-手順の正本は [docs.clavis.nexus](https://docs.clavis.nexus)。`message_digest` の計算はこのリポジトリの対象外。登録には、呼び出し側が用意した digest 文字列を渡す。
+手順の正本は [docs.clavis.nexus](https://docs.clavis.nexus)。署名は `Authorization: ClavisEntity` と RFC 8785 の正準 JSON で、`POST /relay/v1/sign` のあと `POST /relay/v1/sign/complete` を送る。
 
 ---
 
@@ -20,7 +20,7 @@ Clavis App 向けの公開 npm パッケージ。ライセンスは MIT。
 2. `main` の該当コミットに `<dir>-v<version>` のタグを打って push する
 
    ```bash
-   git tag app-v3.0.1 && git push origin app-v3.0.1
+   git tag app-v4.0.0 && git push origin app-v4.0.0
    ```
 
 3. ワークフローが検査・build・試験・pack のあと、npm に **staged** で積む。この時点では公開されない

@@ -1,7 +1,7 @@
 {
   "name": "@clavis.nexus/app",
-  "version": "3.0.1",
-  "description": "Server SDK for Clavis App — register signature requests and delegations, verify receipts and records with the Collatio verifier, and commit ledger records with an opening the holder can keep",
+  "version": "4.0.0",
+  "description": "Server SDK for Clavis App — sign through the relay, verify receipts and records with the Collatio verifier, and commit ledger records with an opening the holder can keep",
   "type": "module",
   "license": "MIT",
   "repository": {

@@ -17,13 +17,8 @@ export type DevelopersSession = {
 };
 
 /**
- * A holder receipt (`receipt@1`): Clavis's countersignature that it accepted a statement signed with
- * a passkey. Pass it as `receipt` in the body of an Org step.
- */
-/**
- * A holder receipt (`receipt@1`). Carry it as the JSON string Clavis returned and pass it on to where
- * it is consumed, the Org API, without parsing it. To read what it holds, give it to the verifier,
- * `createVerifier` in `@clavis.nexus/app`.
+ * A holder receipt (`receipt@2`). Carry it as the JSON string that arrived and pass it on to the Org API.
+ * `@clavis.nexus/collatio` 1.0.1, used by `createVerifier` in `@clavis.nexus/app`, refuses this string with `receipt_type`.
  */
 export type Receipt = string;
 

@@ -65,6 +65,10 @@ describe("verifyReceipt", () => {
     const dup = APP_RECEIPT.replace('"type":"receipt.app@1"', '"type":"receipt.app@1","type":"receipt.app@1"');
     await expect(v.verifyReceipt(dup)).rejects.toMatchObject({ verifierReason: "json_duplicate_key" });
     await expect(v.verifyReceipt(APP_RECEIPT, { expect: { aud: "request:eu1.other" } })).rejects.toMatchObject({ verifierReason: "expect_aud" });
+    await expect(v.verifyReceipt('{"type":"receipt@2","statement":{"type":"note"}}')).rejects.toMatchObject({
+      code: "receipt_invalid",
+      verifierReason: "receipt_type",
+    });
   });
 
   it("trusts only the Master pin, and refuses the 2.x option", async () => {
@@ -108,7 +112,8 @@ describe("verifyMandateRecord / verifyMandateHistory", () => {
     });
     const h = vector("mandate_history").input;
     const history = await v.verifyMandateHistory({ grant: h.grant as string, terms: h.terms as string, uses: h.uses as string[], close: h.close as string });
-    expect(history.grant).toMatchObject({ type: "mandate.grant@1", onBehalf: null });
+    expect(history.grant).toMatchObject({ type: "mandate.grant@1", mandate: expect.any(String) });
+    expect(history.grant).not.toHaveProperty("onBehalf");
     expect(history.uses).toHaveLength(2);
     expect(history.close).toMatchObject({ reason: "revoked_by_holder", uses: 2 });
   });

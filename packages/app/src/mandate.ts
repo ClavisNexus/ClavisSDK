@@ -18,8 +18,6 @@ export const MANDATE_USE_REQUEST = "mandate.use_request@1";
 export const MANDATE_USE = "mandate.use@1";
 export const MANDATE_CLOSE = "mandate.close@1";
 export const MANDATE_GRANT = "mandate.grant@1";
-/** A grant delegated on behalf of an organisation, carrying `org` and `domain` */
-export const MANDATE_GRANT_ON_BEHALF = "mandate.grant.on_behalf@1";
 
 export const MANDATE_OPERATIONS_MAX = 16;
 export const MANDATE_TARGETS_MAX = 32;
@@ -32,7 +30,7 @@ export const MANDATE_LIFETIME_MAX_SEC = 30 * 86_400;
 /** The expiry is more than 5 minutes after the request */
 export const MANDATE_LIFETIME_MIN_SEC = 300;
 
-/** Why a delegation closed. `signer_designation_ended` belongs only to one granted on behalf of an organisation, when the granter's signer designation ended */
+/** Why a delegation closed */
 export const MANDATE_CLOSE_REASONS = [
   "account_closed",
   "exhausted",
