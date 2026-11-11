@@ -28,26 +28,20 @@ function stubBrowserLanguages(languages: string[]): void {
 }
 
 describe("openHandoffShell", () => {
-  it("walks digest, register, then connect before assign", async () => {
+  it("walks digest, then register, and finishes those phases", async () => {
     const seen: string[] = [];
-    let assigned = "";
     await openHandoffShell({
       phaseGapMs: 0,
-      allowedConsumeHosts: ["api.example"],
-      assign: (url) => {
-        assigned = url;
-        seen.push(activePhase() ?? "done");
-        expect(document.querySelectorAll(".is-done")).toHaveLength(HANDOFF_PHASE_IDS.length);
-      },
       register: () => {
         seen.push(activePhase() ?? "");
         expect(document.querySelector(".clavis-handoff-stream")).toBeNull();
         expect(document.body.classList.contains("clavis-handoff-open")).toBe(true);
-        return Promise.resolve("https://api.example/consume");
+        return Promise.resolve();
       },
     });
-    expect(seen).toEqual(["register", "done"]);
-    expect(assigned).toBe("https://api.example/consume");
+    expect(seen).toEqual(["register"]);
+    expect(document.querySelectorAll(".is-done")).toHaveLength(HANDOFF_PHASE_IDS.length);
+    expect(phaseLabels()).toEqual(HANDOFF_PHASE_IDS.map((id) => HANDOFF_TEXT.en.phases[id]));
     expect(document.querySelector(".clavis-handoff")).not.toBeNull();
   });
 
@@ -56,27 +50,20 @@ describe("openHandoffShell", () => {
       mode: "stream",
       phaseGapMs: 0,
       uiLocales: ["ja"],
-      allowedConsumeHosts: ["api.example"],
-      assign: () => undefined,
       register: ({ appendLines }) => {
         appendLines(["> register"]);
         expect(text(".clavis-handoff-stream")).toContain("> register");
         expect(text(".clavis-handoff-stream-title")).toBe(HANDOFF_TEXT.ja.streamTitle);
-        return Promise.resolve("https://api.example/consume");
+        return Promise.resolve();
       },
     });
   });
 
   it("keeps the overlay and rejects when register fails", async () => {
-    const assign = () => {
-      throw new Error("assign should not run");
-    };
     await expect(
       openHandoffShell({
         phaseGapMs: 0,
         uiLocales: ["ja"],
-        allowedConsumeHosts: ["api.example"],
-        assign,
         register: () => Promise.reject(new Error("HTTP 503")),
       }),
     ).rejects.toThrow("HTTP 503");
@@ -93,47 +80,12 @@ describe("openHandoffShell", () => {
       openHandoffShell({
         phaseGapMs: 0,
         uiLocales: ["en"],
-        allowedConsumeHosts: ["api.example"],
-        assign: () => undefined,
-        register: () => Promise.resolve("https://evil.example/consume"),
+        register: () => Promise.reject(new Error("relay down at evil.example")),
       }),
-    ).rejects.toMatchObject({ code: "consume_url_host_not_allowed" });
+    ).rejects.toThrow("relay down at evil.example");
     expect(text(".clavis-handoff-title")).toBe(HANDOFF_TEXT.en.errorTitle);
-    expect(text(".clavis-handoff-error")).toBe(HANDOFF_TEXT.en.errorBlocked);
+    expect(text(".clavis-handoff-error")).toBe(HANDOFF_TEXT.en.errorRetry);
     expect(document.querySelector(".clavis-handoff-card")?.textContent).not.toContain("evil.example");
-  });
-
-  it("names the cause of an unusable consume_url in code", async () => {
-    const cases: Array<[string, string]> = [
-      ["not a url", "invalid_consume_url"],
-      ["http://api.example/consume", "insecure_consume_url"],
-      ["https://user:pw@api.example/consume", "consume_url_credentials"],
-      ["https://evil.example/consume", "consume_url_host_not_allowed"],
-    ];
-    for (const [consumeUrl, code] of cases) {
-      await expect(
-        openHandoffShell({
-          phaseGapMs: 0,
-          allowedConsumeHosts: ["api.example"],
-          assign: () => undefined,
-          register: () => Promise.resolve(consumeUrl),
-        }),
-      ).rejects.toMatchObject({ name: "HandoffShellError", code });
-      document.body.innerHTML = "";
-    }
-  });
-
-  it("accepts cleartext consume_url on a loopback host", async () => {
-    let assigned = "";
-    await openHandoffShell({
-      phaseGapMs: 0,
-      allowedConsumeHosts: ["localhost"],
-      assign: (url) => {
-        assigned = url;
-      },
-      register: () => Promise.resolve("http://localhost:8787/consume"),
-    });
-    expect(assigned).toBe("http://localhost:8787/consume");
   });
 
   it("labels the phases in the language the caller asked for", async () => {
@@ -141,9 +93,7 @@ describe("openHandoffShell", () => {
       await openHandoffShell({
         phaseGapMs: 0,
         uiLocales: [locale],
-        allowedConsumeHosts: ["api.example"],
-        assign: () => undefined,
-        register: () => Promise.resolve("https://api.example/consume"),
+        register: () => Promise.resolve(),
       });
       expect(phaseLabels()).toEqual(HANDOFF_PHASE_IDS.map((id) => HANDOFF_TEXT[locale].phases[id]));
       expect(text(".clavis-handoff-title")).toBe(HANDOFF_TEXT[locale].title);
@@ -155,9 +105,7 @@ describe("openHandoffShell", () => {
     stubBrowserLanguages(["ja-JP", "en"]);
     await openHandoffShell({
       phaseGapMs: 0,
-      allowedConsumeHosts: ["api.example"],
-      assign: () => undefined,
-      register: () => Promise.resolve("https://api.example/consume"),
+      register: () => Promise.resolve(),
     });
     expect(phaseLabels()).toEqual(HANDOFF_PHASE_IDS.map((id) => HANDOFF_TEXT.ja.phases[id]));
   });
@@ -170,38 +118,37 @@ describe("openHandoffShell", () => {
         title: "Vorbereitung",
         text: {
           hint: "Die Anfrage wird registriert.",
-          phases: { connect: "Weiter zu Connect" },
+          phases: { register: "Anfrage registrieren" },
           errorTitle: "Abgebrochen",
-          errorBlocked: "Bitte wenden Sie sich an den Support.",
+          errorRetry: "Bitte versuchen Sie es erneut.",
         },
-        allowedConsumeHosts: ["api.example"],
-        assign: () => undefined,
-        register: () => Promise.resolve("https://evil.example/consume"),
+        register: () => Promise.reject(new Error("HTTP 503")),
       }),
-    ).rejects.toMatchObject({ code: "consume_url_host_not_allowed" });
-    expect(phaseLabels()).toEqual([
-      HANDOFF_TEXT.en.phases.digest,
-      HANDOFF_TEXT.en.phases.register,
-      "Weiter zu Connect",
-    ]);
+    ).rejects.toThrow("HTTP 503");
+    expect(phaseLabels()).toEqual([HANDOFF_TEXT.en.phases.digest, "Anfrage registrieren"]);
     expect(text(".clavis-handoff-title")).toBe("Abgebrochen");
-    expect(text(".clavis-handoff-error")).toBe("Bitte wenden Sie sich an den Support.");
+    expect(text(".clavis-handoff-error")).toBe("Bitte versuchen Sie es erneut.");
   });
 
-  it("keeps title and hint over the resolved language while the handoff runs", async () => {
+  it("keeps title and hint over the resolved language while registration runs", async () => {
     await openHandoffShell({
       phaseGapMs: 0,
       uiLocales: ["ja"],
       title: "権限の付与",
       hint: "内容を確認しています。",
-      allowedConsumeHosts: ["api.example"],
-      assign: () => undefined,
       register: () => {
         expect(text(".clavis-handoff-title")).toBe("権限の付与");
         expect(text(".clavis-handoff-hint")).toBe("内容を確認しています。");
-        return Promise.resolve("https://api.example/consume");
+        return Promise.resolve();
       },
     });
+  });
+
+  it("does not offer a handoff phase", () => {
+    expect([...HANDOFF_PHASE_IDS]).toEqual(["digest", "register"]);
+    const copy = JSON.stringify(HANDOFF_TEXT);
+    expect(copy).not.toContain("Hand over to Connect");
+    expect(copy).not.toContain("Connect へ");
   });
 });
 
