@@ -1,25 +1,32 @@
-import type { JWK } from "jose";
+import { SignJWT, importJWK, type JWK, type JWTPayload } from "jose";
+import {
+  APP_INTENT_REGISTRATION_AUD,
+  appIntentRegistrationIssuer,
+  buildGenericSignClaims,
+  buildMandateClaims,
+  REGISTER_TTL_MAX_SEC,
+  REGISTER_TTL_MIN_SEC,
+  REGISTER_TTL_SEC,
+} from "./claims.js";
 import { canonicalStringify } from "./canonical-json.js";
 import { digestOf } from "./digest.js";
-import {
-  ENTITY_AUTH_SCHEME,
-  isSha256Digest,
-  loadEntityRequestKey,
-  signEntityRequest,
-  type EntityRequestKey,
-} from "./entity-request.js";
 import { AppClientError, type AppClientErrorCode, type AppClientErrorDetails } from "./errors.js";
 import { utf8 } from "./ledger/bytes.js";
 import { LEDGER_APP_AUTH_SCHEME, signLedgerAppRequest } from "./ledger/request.js";
 import {
+  MANDATE_GRANT,
+  MANDATE_GRANT_ON_BEHALF,
   MANDATE_USE_REQUEST,
   mandateUseRequestBody,
   parseMandateTerms,
   parseMandateUseRequest,
+  prepareMandateTerms,
   type MandateCount,
   type MandateTerms,
+  type MandateTermsInput,
   type MandateUseRequest,
 } from "./mandate.js";
+import { APP_SIGN_ON_BEHALF, normalizeOnBehalfDomain, readOnBehalf, type OnBehalf } from "./on-behalf.js";
 import {
   commitLedgerRecord,
   finishLedgerHandoff,
@@ -28,13 +35,26 @@ import {
   type LedgerEvidence,
   type LedgerHandoff,
 } from "./ledger/handoff.js";
-import { createVerifier, type MandateHistoryFacts, type MandateRecordFacts, type Verifier } from "./verify.js";
+import {
+  createVerifier,
+  type MandateHistoryFacts,
+  type MandateRecordFacts,
+  type ReceiptAnchor,
+  type Verifier,
+  type VerifiedReceipt,
+} from "./verify.js";
 import type { VerifierModule } from "./verifier.js";
 
+/** Clavis allows 30 status reads a minute for one request. The default interval stays inside that. */
+const DEFAULT_WAIT_INTERVAL_MS = 2_500;
+/** Upper bound on the gap after a read hits the limit (429) */
+const MAX_RATE_LIMITED_BACKOFF_MS = 15_000;
+const DEFAULT_WAIT_TIMEOUT_MS = 120_000;
+/** SHA-256 as Base64URL (unpadded, 43 characters) */
+const MESSAGE_DIGEST_RE = /^[A-Za-z0-9_-]{43}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** The user's ID in this app, in the form Clavis's delegation store accepts */
 const SUBJECT_RE = /^[A-Za-z0-9._~:@+=/-]{1,200}$/;
-const RELAY_SUITE = "webauthn.relayed@1";
 /** The delegation store's failure `error` values, mapped to SDK codes */
 const MANDATE_FAILURES: Readonly<Record<string, AppClientErrorCode>> = {
   MANDATE_NOT_ALLOWED: "mandate_not_allowed",
@@ -48,18 +68,8 @@ export type CreateAppClientOptions = {
   /** For example `https://api.clavis.nexus` */
   apiOrigin: string;
   appId: string;
-  /** The Ed25519 operate private JWK, as a JSON string or an object. Ledger and delegation calls sign with it. */
+  /** The Ed25519 operate private JWK, as a JSON string or an object. */
   operatePrivateJwk: string | Record<string, unknown>;
-  /**
-   * Entity id (`sha256:` and 43 unpadded Base64URL characters). `sign` and `completeSign` send it as the `entity` claim.
-   * Required for those calls.
-   */
-  entityId?: string;
-  /**
-   * Entity request private JWK (Ed25519 or P-256), as a JSON string or an object. `sign` and `completeSign` sign
-   * `Authorization: ClavisEntity` with it. `kid` is the digest of the public JWK. Required for those calls.
-   */
-  requestPrivateJwk?: string | Record<string, unknown>;
   /**
    * Clavis's Master public JWK (EC P-256, an object or a JSON string). It is the trust root for
    * receipts, delegation records and proof bundles. Missing, it fails at construction. The 2.x
@@ -73,50 +83,140 @@ export type CreateAppClientOptions = {
   fetchImpl?: typeof fetch;
 };
 
-/** The statement, the signer and the key id sent to `POST /relay/v1/sign`. */
-export type SignInput = {
-  /** The statement object. The SDK sends it inside the canonical body and does not rewrite its fields. */
-  statement: { type: string } & Record<string, unknown>;
-  signer: string;
-  /** Key id, `sha256:` and 43 unpadded Base64URL characters. */
-  key: string;
-  /** Included as `link_lookup` when set, including `null`. */
-  linkLookup?: string | null;
-  signal?: AbortSignal;
-};
-
-/** The relay's answer to `POST /relay/v1/sign`. */
-export type SignStarted = {
-  envelope: Record<string, unknown>;
-  dimension: Record<string, unknown>;
-  challenge: string;
-};
-
-/**
- * WebAuthn fields for `POST /relay/v1/sign/complete`. `userHandle` and `rawId` are not part of this object
- * and are not sent.
- */
-export type SignProof = {
-  authenticator_data: string;
-  client_data_json: string;
-  signature: string;
-};
-
-export type CompleteSignInput = {
+export type RegisterGenericSignInput = {
   /**
-   * The `envelope` object from `sign`, or its digest (`sha256:` and 43 unpadded Base64URL characters).
-   * The request sends the digest.
+   * The message_digest the caller prepared (SHA-256 as Base64URL, 43 characters). The SDK does not
+   * compute it. Clavis builds the statement `app.sign@1 { app, digest }` from it, and the user signs
+   * that with a passkey.
    */
-  envelope: Record<string, unknown> | string;
-  proof: SignProof;
+  messageDigest: string;
+  /**
+   * Where to send the user after signing: https under the app's confirmed host. Omitted, the user ends
+   * on Connect's completion screen and finds their own way back to where they started (an agent or a
+   * chat screen, for instance).
+   */
+  returnUrl?: string;
+  webhookUrl?: string;
+  allowedSub?: string;
+  displayHint?: string;
+  /**
+   * The language of the confirmation screen on Connect. BCP 47 language tags in order of preference
+   * (for example `["ja"]`, `["en-GB", "en"]`). Connect chooses from the languages it has open, in this
+   * order, ahead of the user's choice and the browser's language. Omitted, the user's choice and the
+   * browser's language decide. Use the language you wrote `displayHint` in.
+   */
+  uiLocales?: readonly string[];
+  /**
+   * How long the request lives, in seconds (60–900). The user starts signing on Connect within that
+   * time. Omitted, it is 120 seconds. It cannot go over the cap set on the app in developers (300
+   * seconds by default); over it is `register_failed` (`apiError` is `REGISTRATION_TTL_TOO_LONG`).
+   */
+  ttlSeconds?: number;
+  /**
+   * Ask for the signature on behalf of an organisation. `domain` is a domain that organisation
+   * confirmed in Clavis through DNS. Only a person designated as a signer for it can sign, and the
+   * receipt's statement becomes `app.sign.on_behalf@1`. Turn on "Request on behalf of an
+   * organisation" under the app's allowed Intents first.
+   */
+  onBehalf?: { domain: string };
   signal?: AbortSignal;
 };
 
-/**
- * The relay's answer to `POST /relay/v1/sign/complete`. `receipt` is the `receipt@2` string as it arrived.
- * `@clavis.nexus/collatio` 1.0.1 refuses that string with `receipt_type`. This result does not say the verifier accepted it.
- */
-export type CompletedSign = { receipt: string };
+export type RegisterResult = {
+  requestId: string;
+  pollSecret: string;
+  consumeUrl: string;
+  linkConsumeUrl?: string;
+  displayCode?: string;
+  /** When asked on behalf of an organisation, the domain in the form Clavis accepted. Pass it as `expectedOnBehalf` when you read the completion */
+  onBehalf?: { domain: string };
+};
+
+export type IntentStatusPending = { state: "pending" };
+export type IntentStatusIssued = {
+  state: "intent_issued";
+  intentType: string;
+};
+export type IntentStatusCompleted = {
+  state: "completed";
+  intentType: string;
+  /** The signed statement's type ID (`app.sign@1`, or `app.sign.on_behalf@1` on behalf of an organisation) */
+  statementType: string;
+  /** What was signed. The SDK has checked that it matches the messageDigest from registration */
+  messageDigest: string;
+  /** The user's ID in this app. It differs from app to app, and is the same as the OIDC `sub` */
+  sub: string;
+  /** When it was signed (Unix seconds) */
+  signedAt: number;
+  /** The app receipt (`receipt.app@1`), as the string that arrived. The verifier has checked it. Store it, and show it to the user or a third party */
+  receipt: string;
+  /** Whether the receipt's mark was appended to the first-party shard, checked against the trust surface's checkpoint and the inclusion proof */
+  anchor: ReceiptAnchor;
+  /**
+   * When signed on behalf of an organisation, that organisation (its ID in Clavis and its domain). The
+   * SDK has checked it against the domain you asked for. It shows that Clavis confirmed, at
+   * completion, that the person who signed was designated as a signer for that organisation
+   */
+  onBehalf?: OnBehalf;
+};
+
+export type IntentStatus = IntentStatusPending | IntentStatusIssued | IntentStatusCompleted;
+
+export type RegisterMandateInput = {
+  /**
+   * The terms to delegate: operations, counterparties, amounts, uses, expiry and the actor. A `label`
+   * is the wording the user sees, normalised by the same rules Clavis uses (NFC, runs of white space
+   * collapsed). Operations and counterparties are reordered by identifier. The expiry (`not_after`) is
+   * more than 5 minutes and at most 30 days after the request. Uses run from 1 to 1,000.
+   */
+  terms: MandateTermsInput;
+  /** The user's ID in this app (the same value as the OIDC `sub`). Only this person can sign the delegation */
+  allowedSub: string;
+  /** Where to send the user after signing: https under the app's confirmed host. Omitted, the user ends on Connect's completion screen */
+  returnUrl?: string;
+  webhookUrl?: string;
+  /** The language of the delegation's confirmation screen on Connect. Use the language you wrote the terms' labels in */
+  uiLocales?: readonly string[];
+  /** How long the request lives, in seconds (60–900). This is not the delegation's expiry */
+  ttlSeconds?: number;
+  /**
+   * Ask for the delegation on behalf of an organisation. Only a person designated as a signer for it
+   * can sign, and the grant's statement becomes `mandate.grant.on_behalf@1`. When the signer
+   * designation ends, the delegation closes (reason `signer_designation_ended`)
+   */
+  onBehalf?: { domain: string };
+  signal?: AbortSignal;
+};
+
+export type RegisterMandateResult = RegisterResult & {
+  /** The delegation's ID and the terms the user signs, normalised. Pass it when you wait for completion */
+  mandate: ExpectedMandate;
+};
+
+/** The delegation you asked for: its ID, the normalised terms, and the accepted domain when it is on behalf of an organisation. This is `mandate` in `registerMandate`'s result */
+export type ExpectedMandate = { id: string; terms: MandateTerms; onBehalf?: { domain: string } };
+
+export type MandateStatusCompleted = {
+  state: "completed";
+  intentType: string;
+  /** The delegation's ID */
+  mandate: string;
+  /** The terms the user signed. The SDK has checked them against the hash in the receipt's `terms` */
+  terms: MandateTerms;
+  /** The user's ID in this app */
+  sub: string;
+  /** When the delegation was signed (Unix seconds) */
+  grantedAt: number;
+  /** The grant's app receipt (`receipt.app@1`, statement `mandate.grant@1` or `mandate.grant.on_behalf@1`). Store it as the string that arrived, and use it to check the full set of records */
+  receipt: string;
+  anchor: ReceiptAnchor;
+  /** When delegated on behalf of an organisation, that organisation. The SDK has checked it against the domain you asked for */
+  onBehalf?: OnBehalf;
+};
+
+export type MandateStatus = IntentStatusPending | IntentStatusIssued | MandateStatusCompleted;
+
+export type WaitForMandateOptions = Omit<WaitForCompletionOptions, "expectedMessageDigest" | "expectedOnBehalf">;
 
 export type UseMandateInput = {
   /** The operation's name in the terms */
@@ -168,6 +268,8 @@ export type MandateView = {
   totals: MandateCount;
   /** When closed, the close record: the string that arrived, and what the verifier read from it */
   close: { record: string; facts: MandateCloseFacts } | null;
+  /** For a delegation granted on behalf of an organisation, that organisation */
+  onBehalf?: OnBehalf;
 };
 
 /** The position in the ledger: the customer Org's log, where the grant, use and close commitments were appended */
@@ -186,19 +288,75 @@ export type MandateHistory = {
 
 export type MandateCallOptions = { signal?: AbortSignal };
 
+export type StatusOptions = {
+  signal?: AbortSignal;
+  /**
+   * For a request made on behalf of an organisation, the `onBehalf` from `registerGenericSign`'s
+   * result. With it, the SDK checks that the receipt is `app.sign.on_behalf@1` for that domain;
+   * without it, that the receipt is `app.sign@1`
+   */
+  expectedOnBehalf?: { domain: string };
+};
+
+export type WaitForCompletionOptions = {
+  expectedMessageDigest: string;
+  /** For a request made on behalf of an organisation, the `onBehalf` from `registerGenericSign`'s result (as in `StatusOptions.expectedOnBehalf`) */
+  expectedOnBehalf?: { domain: string };
+  /**
+   * How long to wait between reads, in milliseconds. Omitted, it is 2,500. Clavis allows 30 status
+   * reads a minute for one request; a read that hits the limit (429) leaves the wait running and
+   * spaces the next reads further apart.
+   */
+  intervalMs?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+};
+
+export type WebhookPing = {
+  event: string;
+  requestId: string;
+  intentType: string;
+  state: "completed";
+};
+
 export type { CommitLedgerInput, FinishLedgerHandoffOptions, LedgerEvidence, LedgerHandoff };
 
 export type AppClient = {
-  /** Bind a statement. `POST /relay/v1/sign`, `Authorization: ClavisEntity`, body RFC 8785 canonical JSON. */
-  sign: (input: SignInput) => Promise<SignStarted>;
-  /** Finish the signature. `POST /relay/v1/sign/complete`. Returns the `receipt@2` string without asking the bundled verifier to accept it. */
-  completeSign: (input: CompleteSignInput) => Promise<CompletedSign>;
+  registerGenericSign: (input: RegisterGenericSignInput) => Promise<RegisterResult>;
   /** Submit the leaf and return the handoff, which carries the opening. The salt is not sent. */
   commitLedger: (input: CommitLedgerInput) => Promise<LedgerHandoff>;
   /** Add the handoff's opening to the proof bundle (`ledger.bundle@1`), which carries the checkpoint, have the verifier check it, and return it. */
   finishLedgerHandoff: (handoff: LedgerHandoff, options?: FinishLedgerHandoffOptions) => Promise<LedgerEvidence>;
+  getStatus: (
+    requestId: string,
+    pollSecret: string,
+    expectedMessageDigest: string,
+    options?: StatusOptions,
+  ) => Promise<IntentStatus>;
+  waitForCompletion: (
+    requestId: string,
+    pollSecret: string,
+    opts: WaitForCompletionOptions,
+  ) => Promise<IntentStatusCompleted>;
+  /** Read the completion ping. A ping carries no signature and says no more than "come and read status", so read status afterwards */
+  readWebhookPing: (body: unknown) => WebhookPing;
   /** Check receipts, delegation records and proof bundles with the verifier, for instance to check a stored receipt later */
   verifier: Verifier;
+  /** Ask for a delegation. The user reads the terms on Connect, signs with a passkey, and the delegation opens */
+  registerMandate: (input: RegisterMandateInput) => Promise<RegisterMandateResult>;
+  getMandateStatus: (
+    requestId: string,
+    pollSecret: string,
+    expected: ExpectedMandate,
+    options?: StatusOptions,
+  ) => Promise<MandateStatus>;
+  waitForMandate: (
+    requestId: string,
+    pollSecret: string,
+    expected: ExpectedMandate,
+    opts?: WaitForMandateOptions,
+  ) => Promise<MandateStatusCompleted>;
   /** Before each action within the terms, have Clavis check and count it. Outside the terms is refused with `mandate_outside` */
   useMandate: (mandateId: string, input: UseMandateInput) => Promise<MandateUseResult>;
   getMandate: (mandateId: string, options?: MandateCallOptions) => Promise<MandateView>;
@@ -265,6 +423,225 @@ function parseOperateJwk(raw: string | Record<string, unknown>): JWK {
   return jwk;
 }
 
+/** The shape Clavis accepts: BCP 47 language tags, at most 16. A language it does not know is not refused; Connect chooses from the languages it has open. */
+const UI_LOCALE_SHAPE = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/;
+const UI_LOCALE_MAX_LENGTH = 35;
+const UI_LOCALES_MAX = 16;
+
+function normalizeUiLocales(input: readonly string[] | undefined): string[] | undefined {
+  if (input === undefined) return undefined;
+  if (!Array.isArray(input) || input.length === 0 || input.length > UI_LOCALES_MAX) {
+    throw new AppClientError("invalid_ui_locales", `uiLocales must list 1 to ${UI_LOCALES_MAX} language tags`);
+  }
+  return input.map((raw) => {
+    const tag = typeof raw === "string" ? raw.trim().replace(/_/g, "-") : "";
+    if (!tag || tag.length > UI_LOCALE_MAX_LENGTH || !UI_LOCALE_SHAPE.test(tag)) {
+      throw new AppClientError("invalid_ui_locales", "uiLocales must be BCP 47 language tags (e.g. ja, en-GB)");
+    }
+    return tag;
+  });
+}
+
+async function signOperateJwt(claims: Record<string, unknown>, operateJwk: JWK, appId: string): Promise<string> {
+  const key = await importJWK(operateJwk, "EdDSA");
+  return await new SignJWT(claims as JWTPayload)
+    .setProtectedHeader({ alg: "EdDSA" })
+    .setIssuer(appIntentRegistrationIssuer(appId))
+    .setAudience(APP_INTENT_REGISTRATION_AUD)
+    .sign(key);
+}
+
+function assertApiOriginUrl(raw: string, apiOrigin: string, field: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new AppClientError("invalid_register_response", `${field} is not a URL`);
+  }
+  if (url.username || url.password || url.origin !== apiOrigin) {
+    throw new AppClientError("invalid_register_response", `${field} origin does not match apiOrigin`);
+  }
+  return url.toString();
+}
+
+function parseRegisterPayload(payload: unknown, apiOrigin: string): RegisterResult {
+  const rec = asRecord(payload);
+  if (!rec) throw new AppClientError("invalid_register_response", "register payload must be an object");
+  const requestId = rec.request_id;
+  const pollSecret = rec.poll_secret;
+  const consumeUrl = rec.consume_url;
+  if (typeof requestId !== "string" || requestId.length === 0) {
+    throw new AppClientError("invalid_register_response", "request_id missing");
+  }
+  if (typeof pollSecret !== "string" || pollSecret.length === 0) {
+    throw new AppClientError("invalid_register_response", "poll_secret missing");
+  }
+  if (typeof consumeUrl !== "string" || consumeUrl.length === 0) {
+    throw new AppClientError("invalid_register_response", "consume_url missing");
+  }
+  const out: RegisterResult = {
+    requestId,
+    pollSecret,
+    consumeUrl: assertApiOriginUrl(consumeUrl, apiOrigin, "consume_url"),
+  };
+  if (typeof rec.link_consume_url === "string" && rec.link_consume_url.length > 0) {
+    out.linkConsumeUrl = assertApiOriginUrl(rec.link_consume_url, apiOrigin, "link_consume_url");
+  }
+  if (typeof rec.display_code === "string" && rec.display_code.length > 0) {
+    out.displayCode = rec.display_code;
+  }
+  return out;
+}
+
+type StatusRead =
+  | IntentStatusPending
+  | IntentStatusIssued
+  | { state: "completed"; intentType: string; receipt: string; payload: Record<string, unknown> };
+
+/** Read the status body. A completion's receipt comes back as the string it arrived as; checking it with the verifier is the caller's job */
+function parseStatusRead(payload: unknown): StatusRead {
+  const rec = asRecord(payload);
+  if (!rec) throw new AppClientError("invalid_status", "status payload must be an object");
+  const state = rec.state;
+  if (state === "pending") return { state: "pending" };
+  if (state === "intent_issued") {
+    const intentType = requiredField(rec, "intent_type");
+    if (!intentType) throw new AppClientError("invalid_status", "intent_issued is missing intent_type");
+    return { state: "intent_issued", intentType };
+  }
+  if (state !== "completed") {
+    throw new AppClientError("invalid_status", `unexpected status state: ${String(state)}`);
+  }
+  const intentType = requiredField(rec, "intent_type");
+  if (!intentType) throw new AppClientError("invalid_status", "completed status is missing intent_type");
+  const receipt = requiredField(rec, "receipt");
+  if (!receipt) throw new AppClientError("invalid_status", "completed status is missing its receipt");
+  return { state: "completed", intentType, receipt, payload: rec };
+}
+
+/**
+ * Have the verifier check the completion's receipt, and see that it is an app receipt for this request
+ * of this app (`aud` is `request:<the request's ID>`). The facts of the completion are read from what
+ * the verifier returns, not from the fields of the response.
+ */
+async function verifiedCompletion(verifier: Verifier, receipt: string, requestId: string, appId: string): Promise<VerifiedReceipt> {
+  const v = await verifier.verifyReceipt(receipt, { expect: { aud: `request:${requestId}` } });
+  if (v.type !== "receipt.app@1") throw new AppClientError("receipt_invalid", "the completed status carries a holder receipt, not an app receipt");
+  if (v.statement.app !== appId || v.statement.request !== requestId) {
+    throw new AppClientError("status_request_mismatch", "the receipt is not for this request of this app");
+  }
+  return v;
+}
+
+/**
+ * Check that the receipt's statement and domain match whether the request was made on behalf of an
+ * organisation. A receipt that names an organisation when none was asked for, and one that names none
+ * when an organisation was asked for, are both refused.
+ */
+function onBehalfOf(
+  verified: VerifiedReceipt,
+  plainType: string,
+  onBehalfType: string,
+  expected: { domain: string } | undefined,
+): OnBehalf | null {
+  const type = verified.statement.type;
+  if (!expected) {
+    if (type !== plainType) throw new AppClientError("invalid_status", `completed status receipt is not a ${plainType} signature`);
+    return null;
+  }
+  const onBehalf = type === onBehalfType ? readOnBehalf(verified.statement) : null;
+  if (!onBehalf) throw new AppClientError("on_behalf_mismatch", `completed status receipt is not a ${onBehalfType} signature`);
+  if (onBehalf.domain !== expected.domain) {
+    throw new AppClientError("on_behalf_mismatch", "the signed organization does not match the requested domain");
+  }
+  return onBehalf;
+}
+
+/** Read the signature's completion (statement `app.sign@1`, or `app.sign.on_behalf@1` on behalf of an organisation) from the checked receipt. */
+function signStatusFrom(intentType: string, verified: VerifiedReceipt, expectedOnBehalf: { domain: string } | undefined): IntentStatusCompleted {
+  const onBehalf = onBehalfOf(verified, "app.sign@1", APP_SIGN_ON_BEHALF, expectedOnBehalf);
+  const digest = verified.statement.digest;
+  if (typeof digest !== "string" || digest.length === 0) {
+    throw new AppClientError("invalid_status", "completed status receipt has no message digest");
+  }
+  return {
+    state: "completed",
+    intentType,
+    statementType: verified.statement.type,
+    messageDigest: digest,
+    sub: verified.envelope.signer,
+    signedAt: verified.envelope.iat,
+    receipt: verified.receipt,
+    anchor: verified.anchor,
+    ...(onBehalf ? { onBehalf } : {}),
+  };
+}
+
+/**
+ * Read the delegation's completion (statement `mandate.grant@1`, or `mandate.grant.on_behalf@1` on
+ * behalf of an organisation), and check that it binds the delegation ID and the hash of the terms you
+ * asked for.
+ */
+async function mandateStatusFrom(intentType: string, verified: VerifiedReceipt, expected: ExpectedMandate): Promise<MandateStatusCompleted> {
+  const statement = verified.statement;
+  const onBehalf = onBehalfOf(verified, MANDATE_GRANT, MANDATE_GRANT_ON_BEHALF, expected.onBehalf);
+  if (statement.mandate !== expected.id || statement.terms !== (await digestOf(expected.terms))) {
+    throw new AppClientError("mandate_mismatch", "the signed grant does not bind the requested mandate and terms");
+  }
+  return {
+    state: "completed",
+    intentType,
+    mandate: expected.id,
+    terms: expected.terms,
+    sub: verified.envelope.signer,
+    grantedAt: verified.envelope.iat,
+    receipt: verified.receipt,
+    anchor: verified.anchor,
+    ...(onBehalf ? { onBehalf } : {}),
+  };
+}
+
+function requiredField(rec: Record<string, unknown>, key: string): string | null {
+  const value = rec[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function assertStatusRequestId(payload: unknown, requestId: string): void {
+  const rec = asRecord(payload);
+  if (rec?.request_id !== requestId) {
+    throw new AppClientError("status_request_mismatch", "signed status is not bound to this request");
+  }
+}
+
+function assertDigestMatch(status: IntentStatus, expected: string): void {
+  if (status.state !== "completed") return;
+  if (status.messageDigest !== expected) {
+    throw new AppClientError("digest_mismatch", "attested message_digest does not match registration digest");
+  }
+}
+
+function parseWebhookPing(payload: unknown): WebhookPing {
+  const rec = asRecord(payload);
+  if (!rec) throw new AppClientError("invalid_webhook_ping", "webhook payload must be an object");
+  const event = rec.event;
+  const requestId = rec.request_id;
+  const intentType = rec.intent_type;
+  const state = rec.state;
+  if (typeof event !== "string" || event.length === 0) {
+    throw new AppClientError("invalid_webhook_ping", "event required");
+  }
+  if (typeof requestId !== "string" || requestId.length === 0) {
+    throw new AppClientError("invalid_webhook_ping", "request_id required");
+  }
+  if (typeof intentType !== "string" || intentType.length === 0) {
+    throw new AppClientError("invalid_webhook_ping", "intent_type required");
+  }
+  if (state !== "completed") {
+    throw new AppClientError("invalid_webhook_ping", "state must be completed");
+  }
+  return { event, requestId, intentType, state: "completed" };
+}
+
 async function readJson(res: Response): Promise<unknown> {
   const text = await res.text();
   if (!text) return null;
@@ -273,6 +650,42 @@ async function readJson(res: Response): Promise<unknown> {
   } catch {
     throw new AppClientError("invalid_json", "response body is not JSON", res.status);
   }
+}
+
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new AppClientError("aborted", "request aborted"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new AppClientError("aborted", "request aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function linkAbortSignals(target: AbortController, signals: AbortSignal[]): () => void {
+  const cleanups: Array<() => void> = [];
+  for (const signal of signals) {
+    if (signal.aborted) {
+      if (!target.signal.aborted) target.abort(signal.reason);
+      continue;
+    }
+    const onAbort = () => {
+      if (!target.signal.aborted) target.abort(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort);
+    cleanups.push(() => signal.removeEventListener("abort", onAbort));
+  }
+  return () => {
+    for (const cleanup of cleanups) cleanup();
+  };
 }
 
 function isAbortError(error: unknown, signal?: AbortSignal): boolean {
@@ -318,6 +731,8 @@ function parseMandateView(v: unknown): { view: Omit<MandateView, "close">; close
   ) {
     return null;
   }
+  const onBehalf = r.on_behalf === undefined ? null : readOnBehalf({ type: MANDATE_GRANT_ON_BEHALF, ...asRecord(r.on_behalf) });
+  if (r.on_behalf !== undefined && !onBehalf) return null;
   const close = r.close === null || r.close === undefined ? null : r.close;
   if (close !== null && typeof close !== "string") return null;
   if ((r.state === "closed") !== (close !== null)) return null;
@@ -331,36 +746,10 @@ function parseMandateView(v: unknown): { view: Omit<MandateView, "close">; close
       openedAt: r.opened_at,
       state: r.state,
       totals: totals.amount === undefined ? { uses: totals.uses } : { uses: totals.uses, amount: totals.amount },
+      ...(onBehalf ? { onBehalf } : {}),
     },
     close,
   };
-}
-
-/** The string is JSON whose `type` is `receipt@2`. The original string is what the caller keeps. */
-function isReceipt2(receipt: string): boolean {
-  try {
-    const parsed = JSON.parse(receipt) as unknown;
-    return asRecord(parsed)?.type === "receipt@2";
-  } catch {
-    return false;
-  }
-}
-
-function proofFields(proof: SignProof): SignProof {
-  const authenticator_data = proof?.authenticator_data;
-  const client_data_json = proof?.client_data_json;
-  const signature = proof?.signature;
-  if (
-    typeof authenticator_data !== "string" ||
-    authenticator_data.length === 0 ||
-    typeof client_data_json !== "string" ||
-    client_data_json.length === 0 ||
-    typeof signature !== "string" ||
-    signature.length === 0
-  ) {
-    throw new AppClientError("invalid_sign_input", "proof must carry authenticator_data, client_data_json and signature");
-  }
-  return { authenticator_data, client_data_json, signature };
 }
 
 export function createAppClient(opts: CreateAppClientOptions): AppClient {
@@ -382,23 +771,6 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     fetchImpl,
   });
 
-  function entityId(): string {
-    const id = typeof opts.entityId === "string" ? opts.entityId.trim() : "";
-    if (!isSha256Digest(id)) {
-      throw new AppClientError("invalid_entity_id", "entityId must be sha256: and 43 unpadded Base64URL characters");
-    }
-    return id;
-  }
-
-  let requestKeyPromise: Promise<EntityRequestKey> | null = null;
-  function requestKey(): Promise<EntityRequestKey> {
-    if (opts.requestPrivateJwk === undefined) {
-      throw new AppClientError("invalid_request_jwk", "requestPrivateJwk is required to sign");
-    }
-    requestKeyPromise ??= loadEntityRequestKey(opts.requestPrivateJwk);
-    return requestKeyPromise;
-  }
-
   async function request(url: string, init?: RequestInit, signal?: AbortSignal): Promise<Response> {
     if (signal?.aborted) throw new AppClientError("aborted", "request aborted", undefined, { cause: signal.reason });
     try {
@@ -411,78 +783,254 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     }
   }
 
-  async function relayPost(path: "/relay/v1/sign" | "/relay/v1/sign/complete", value: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-    const url = `${apiOrigin}${path}`;
-    const body = canonicalStringify(value);
-    const bytes = utf8(body);
-    let authorization: string;
-    try {
-      authorization = `${ENTITY_AUTH_SCHEME} ${await signEntityRequest({
-        key: await requestKey(),
-        entity: entityId(),
-        method: "POST",
-        url,
-        body: bytes,
-      })}`;
-    } catch (e) {
-      if (e instanceof AppClientError) throw e;
-      throw new AppClientError("invalid_sign_input", "the relay request could not be signed", undefined, { cause: e });
-    }
+  async function postRegister(
+    claims: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<{ result: RegisterResult; payload: Record<string, unknown> }> {
+    const registration = await signOperateJwt(claims, operateJwk, appId);
     const res = await request(
-      url,
-      { method: "POST", headers: { authorization, "content-type": "application/json" }, body },
+      `${apiOrigin}/app/intent-requests/register`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ registration }),
+      },
       signal,
     );
-    const json = await readJson(res);
+    const body = await readJson(res);
     if (!res.ok) {
-      const details = apiErrorDetails(json);
-      throw new AppClientError("sign_failed", httpFailureMessage(path, res.status, details), res.status, details);
+      const details = apiErrorDetails(body);
+      throw new AppClientError("register_failed", httpFailureMessage("register", res.status, details), res.status, details);
     }
-    return json;
+    const rec = asRecord(body);
+    const payload = rec ? asRecord(rec.payload) : null;
+    if (!payload) {
+      throw new AppClientError("invalid_register_response", "register response must be { payload }");
+    }
+    return { result: parseRegisterPayload(payload, apiOrigin), payload };
   }
 
-  async function sign(input: SignInput): Promise<SignStarted> {
-    const statement = asRecord(input?.statement);
-    if (!statement || typeof statement.type !== "string" || statement.type.length === 0) {
-      throw new AppClientError("invalid_sign_input", "statement must be an object with a type");
-    }
-    const signer = typeof input.signer === "string" ? input.signer : "";
-    if (signer.length === 0 || signer.length > 200) throw new AppClientError("invalid_sign_input", "signer is required");
-    if (typeof input.key !== "string" || !isSha256Digest(input.key)) {
-      throw new AppClientError("invalid_sign_input", "key must be sha256: and 43 unpadded Base64URL characters");
-    }
-    const body: Record<string, unknown> = { key: input.key, signer, statement, suite: RELAY_SUITE };
-    if (input.linkLookup !== undefined) body.link_lookup = input.linkLookup;
-    const json = await relayPost("/relay/v1/sign", body, input.signal);
-    const rec = asRecord(json);
-    const envelope = rec ? asRecord(rec.envelope) : null;
-    const dimension = rec ? asRecord(rec.dimension) : null;
-    const challenge = rec && typeof rec.challenge === "string" ? rec.challenge : "";
-    if (!envelope || !dimension || challenge.length === 0) {
-      throw new AppClientError("invalid_sign_response", "sign response must be { envelope, dimension, challenge }");
-    }
-    return { envelope, dimension, challenge };
+  /** Put the on-behalf domain in the form Clavis accepts, or undefined when it is omitted */
+  function checkedOnBehalf(raw: { domain: string } | undefined): string | undefined {
+    if (raw === undefined) return undefined;
+    const domain = normalizeOnBehalfDomain(raw?.domain);
+    if (!domain) throw new AppClientError("invalid_on_behalf", "onBehalf.domain must be a domain name (e.g. example.co.jp)");
+    return domain;
   }
 
-  async function completeSign(input: CompleteSignInput): Promise<CompletedSign> {
-    const proof = proofFields(input?.proof);
-    let envelope: string;
-    if (typeof input?.envelope === "string") {
-      if (!isSha256Digest(input.envelope)) {
-        throw new AppClientError("invalid_sign_input", "envelope digest must be sha256: and 43 unpadded Base64URL characters");
+  function checkedTtl(raw: number | undefined): number {
+    const ttl = raw ?? REGISTER_TTL_SEC;
+    if (!Number.isInteger(ttl) || ttl < REGISTER_TTL_MIN_SEC || ttl > REGISTER_TTL_MAX_SEC) {
+      throw new AppClientError(
+        "invalid_ttl",
+        `ttlSeconds must be an integer from ${REGISTER_TTL_MIN_SEC} to ${REGISTER_TTL_MAX_SEC}`,
+      );
+    }
+    return ttl;
+  }
+
+  async function registerGenericSign(input: RegisterGenericSignInput): Promise<RegisterResult> {
+    if (!input.messageDigest || !MESSAGE_DIGEST_RE.test(input.messageDigest)) {
+      throw new AppClientError("invalid_message_digest", "messageDigest must be a SHA-256 Base64URL (43 chars)");
+    }
+    const uiLocales = normalizeUiLocales(input.uiLocales);
+    const ttl = checkedTtl(input.ttlSeconds);
+    const onBehalfDomain = checkedOnBehalf(input.onBehalf);
+    const now = Math.floor(Date.now() / 1000);
+    const claims = buildGenericSignClaims({
+      appId,
+      iat: now,
+      exp: now + ttl,
+      jti: crypto.randomUUID(),
+      messageDigest: input.messageDigest,
+      displayHint: input.displayHint,
+      returnUrl: input.returnUrl,
+      webhookUrl: input.webhookUrl,
+      allowedSub: input.allowedSub,
+      uiLocales,
+      onBehalfDomain,
+    });
+    const { result } = await postRegister(claims, input.signal);
+    return onBehalfDomain ? { ...result, onBehalf: { domain: onBehalfDomain } } : result;
+  }
+
+  async function registerMandate(input: RegisterMandateInput): Promise<RegisterMandateResult> {
+    const now = Math.floor(Date.now() / 1000);
+    // Check by the same rules Clavis uses, and keep the form the user signs, to match against the terms in the response
+    const prepared = prepareMandateTerms(input.terms, now);
+    if (!prepared.ok) {
+      throw new AppClientError("invalid_mandate_terms", `terms rejected (${prepared.reason})`);
+    }
+    const allowedSub = typeof input.allowedSub === "string" ? input.allowedSub.trim() : "";
+    if (!SUBJECT_RE.test(allowedSub)) {
+      throw new AppClientError("invalid_allowed_sub", "allowedSub must be the user's ID in this App");
+    }
+    const uiLocales = normalizeUiLocales(input.uiLocales);
+    const ttl = checkedTtl(input.ttlSeconds);
+    const onBehalfDomain = checkedOnBehalf(input.onBehalf);
+    const claims = buildMandateClaims({
+      appId,
+      iat: now,
+      exp: now + ttl,
+      jti: crypto.randomUUID(),
+      terms: prepared.terms,
+      allowedSub,
+      returnUrl: input.returnUrl,
+      webhookUrl: input.webhookUrl,
+      uiLocales,
+      onBehalfDomain,
+    });
+    const { result, payload } = await postRegister(claims, input.signal);
+    const mandate = asRecord(payload.mandate);
+    const id = mandate?.id;
+    if (typeof id !== "string" || !UUID_RE.test(id)) {
+      throw new AppClientError("invalid_register_response", "mandate.id missing");
+    }
+    const terms = parseMandateTerms(mandate?.terms);
+    if (!terms || canonicalStringify(terms) !== canonicalStringify(prepared.terms)) {
+      throw new AppClientError("mandate_terms_mismatch", "registered terms differ from the requested terms");
+    }
+    return { ...result, mandate: { id, terms, ...(onBehalfDomain ? { onBehalf: { domain: onBehalfDomain } } : {}) } };
+  }
+
+  async function readStatus(requestId: string, pollSecret: string, signal?: AbortSignal): Promise<StatusRead> {
+    if (!requestId.trim() || !pollSecret.trim()) {
+      throw new AppClientError("invalid_status_args", "requestId and pollSecret required");
+    }
+    const res = await request(
+      `${apiOrigin}/app/intent-requests/status/${encodeURIComponent(requestId)}`,
+      { headers: { "X-Intent-Poll-Secret": pollSecret } },
+      signal,
+    );
+    const body = await readJson(res);
+    if (!res.ok) {
+      const details = apiErrorDetails(body);
+      throw new AppClientError("status_failed", httpFailureMessage("status", res.status, details), res.status, details);
+    }
+    const payload = asRecord(body)?.payload;
+    assertStatusRequestId(payload, requestId);
+    return parseStatusRead(payload);
+  }
+
+  async function getStatus(
+    requestId: string,
+    pollSecret: string,
+    expectedMessageDigest: string,
+    options?: StatusOptions,
+  ): Promise<IntentStatus> {
+    if (!expectedMessageDigest.trim()) {
+      throw new AppClientError("invalid_message_digest", "expectedMessageDigest required");
+    }
+    const expectedOnBehalf = options?.expectedOnBehalf === undefined ? undefined : { domain: checkedOnBehalf(options.expectedOnBehalf)! };
+    const read = await readStatus(requestId, pollSecret, options?.signal);
+    if (read.state !== "completed") return read;
+    const status = signStatusFrom(read.intentType, await verifiedCompletion(verifier, read.receipt, requestId, appId), expectedOnBehalf);
+    assertDigestMatch(status, expectedMessageDigest);
+    return status;
+  }
+
+  function assertExpectedMandate(expected: ExpectedMandate): void {
+    if (!expected || typeof expected.id !== "string" || !UUID_RE.test(expected.id) || !parseMandateTerms(expected.terms)) {
+      throw new AppClientError("invalid_status_args", "expected must be the mandate returned by registerMandate");
+    }
+    if (expected.onBehalf !== undefined && normalizeOnBehalfDomain(expected.onBehalf?.domain) !== expected.onBehalf.domain) {
+      throw new AppClientError("invalid_status_args", "expected.onBehalf must be the onBehalf returned by registerMandate");
+    }
+  }
+
+  async function getMandateStatus(
+    requestId: string,
+    pollSecret: string,
+    expected: ExpectedMandate,
+    options?: StatusOptions,
+  ): Promise<MandateStatus> {
+    assertExpectedMandate(expected);
+    const read = await readStatus(requestId, pollSecret, options?.signal);
+    if (read.state !== "completed") return read;
+    return mandateStatusFrom(read.intentType, await verifiedCompletion(verifier, read.receipt, requestId, appId), expected);
+  }
+
+  function throwIfWaitEnded(caller: AbortSignal | undefined, timeoutSignal: AbortSignal, deadline: number): void {
+    if (caller?.aborted) {
+      throw new AppClientError("aborted", "waitForCompletion aborted", undefined, { cause: caller.reason });
+    }
+    if (timeoutSignal.aborted || Date.now() >= deadline) {
+      throw new AppClientError("timeout", "waitForCompletion timed out");
+    }
+  }
+
+  async function waitForCompletion(
+    requestId: string,
+    pollSecret: string,
+    waitOpts: WaitForCompletionOptions,
+  ): Promise<IntentStatusCompleted> {
+    if (!waitOpts?.expectedMessageDigest?.trim()) {
+      throw new AppClientError("invalid_message_digest", "expectedMessageDigest required");
+    }
+    return waitUntilCompleted(
+      (signal) =>
+        getStatus(requestId, pollSecret, waitOpts.expectedMessageDigest, {
+          signal,
+          ...(waitOpts.expectedOnBehalf ? { expectedOnBehalf: waitOpts.expectedOnBehalf } : {}),
+        }),
+      waitOpts,
+    );
+  }
+
+  async function waitForMandate(
+    requestId: string,
+    pollSecret: string,
+    expected: ExpectedMandate,
+    waitOpts: WaitForMandateOptions = {},
+  ): Promise<MandateStatusCompleted> {
+    assertExpectedMandate(expected);
+    return waitUntilCompleted((signal) => getMandateStatus(requestId, pollSecret, expected, { signal }), waitOpts);
+  }
+
+  /** Read status until completion. A read that hits the limit (429) spaces the next reads further apart and keeps going */
+  async function waitUntilCompleted<T extends { state: string }>(
+    readOnce: (signal: AbortSignal) => Promise<T>,
+    waitOpts: WaitForMandateOptions,
+  ): Promise<Extract<T, { state: "completed" }>> {
+    const intervalMs = waitOpts.intervalMs ?? DEFAULT_WAIT_INTERVAL_MS;
+    const timeoutMs = waitOpts.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+    const sleep = waitOpts.sleep ?? defaultSleep;
+    const deadline = Date.now() + timeoutMs;
+    const timeoutCtrl = new AbortController();
+    const timer = setTimeout(() => timeoutCtrl.abort(), timeoutMs);
+    const linked = new AbortController();
+    const unlink = linkAbortSignals(linked, waitOpts.signal ? [waitOpts.signal, timeoutCtrl.signal] : [timeoutCtrl.signal]);
+    let pauseMs = intervalMs;
+    try {
+      for (;;) {
+        throwIfWaitEnded(waitOpts.signal, timeoutCtrl.signal, deadline);
+        let status: T | null = null;
+        try {
+          status = await readOnce(linked.signal);
+          pauseMs = intervalMs;
+        } catch (e) {
+          if (e instanceof AppClientError && e.code === "aborted") {
+            throwIfWaitEnded(waitOpts.signal, timeoutCtrl.signal, deadline);
+          }
+          // A read that only hit the limit leaves the wait running: double the interval, up to the cap
+          if (!(e instanceof AppClientError && e.code === "status_failed" && e.status === 429)) throw e;
+          pauseMs = Math.min(Math.max(pauseMs * 2, intervalMs), MAX_RATE_LIMITED_BACKOFF_MS);
+        }
+        if (status?.state === "completed") return status as Extract<T, { state: "completed" }>;
+        throwIfWaitEnded(waitOpts.signal, timeoutCtrl.signal, deadline);
+        try {
+          await sleep(pauseMs, linked.signal);
+        } catch (e) {
+          if (e instanceof AppClientError && e.code === "aborted") {
+            throwIfWaitEnded(waitOpts.signal, timeoutCtrl.signal, deadline);
+          }
+          throw e;
+        }
       }
-      envelope = input.envelope;
-    } else if (asRecord(input?.envelope)) {
-      envelope = await digestOf(input.envelope);
-    } else {
-      throw new AppClientError("invalid_sign_input", "envelope must be the object from sign, or its digest");
+    } finally {
+      clearTimeout(timer);
+      unlink();
     }
-    const json = await relayPost("/relay/v1/sign/complete", { envelope, proof }, input.signal);
-    const receipt = asRecord(json)?.receipt;
-    if (typeof receipt !== "string" || !isReceipt2(receipt)) {
-      throw new AppClientError("invalid_sign_response", "sign completion must return a receipt@2 string");
-    }
-    return { receipt };
   }
 
   /** Have the verifier check the close record, and see that it closes this grant of this delegation */
@@ -552,7 +1100,13 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     }
     // The body is the canonical form itself: the JWT's body_sha256 binds to these bytes, and the record binds to this body
     const body = mandateUseRequestBody(useRequest);
-    const { json, jwt } = await mandateCall("mandate use", "POST", `/app/mandates/${mandateId}/uses`, body, input.signal);
+    const { json, jwt } = await mandateCall(
+      "mandate use",
+      "POST",
+      `/app/mandates/${mandateId}/uses`,
+      body,
+      input.signal,
+    );
     const rec = asRecord(json);
     const record = rec?.record;
     if (typeof record !== "string") throw new AppClientError("invalid_mandate_record", "mandate use returned no record");
@@ -590,7 +1144,13 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
 
   async function getMandateHistory(mandateId: string, options?: MandateCallOptions): Promise<MandateHistory> {
     assertMandateId(mandateId);
-    const { json } = await mandateCall("mandate history", "GET", `/app/mandates/${mandateId}?history=1`, undefined, options?.signal);
+    const { json } = await mandateCall(
+      "mandate history",
+      "GET",
+      `/app/mandates/${mandateId}?history=1`,
+      undefined,
+      options?.signal,
+    );
     const rec = asRecord(json);
     const view = await verifiedView(rec?.view, "mandate history");
     if (view.id !== mandateId) throw new AppClientError("invalid_mandate_record", "mandate history returned another mandate");
@@ -609,6 +1169,10 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     });
     if (facts.grant.mandate !== mandateId || facts.grant.app !== appId) {
       throw new AppClientError("mandate_mismatch", "the grant receipt is not for this mandate of this app");
+    }
+    // The organisation the state names and the one the grant bound are the same; for a delegation not on behalf of one, neither names it
+    if (canonicalStringify(facts.grant.onBehalf) !== canonicalStringify(view.onBehalf ?? null)) {
+      throw new AppClientError("mandate_mismatch", "the mandate's organization differs from the grant");
     }
     const last = facts.uses[facts.uses.length - 1];
     const totals: MandateCount = last ? last.totals : { uses: 0, ...(view.terms.amount ? { amount: 0 } : {}) };
@@ -665,9 +1229,14 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
   }
 
   return {
-    sign,
-    completeSign,
+    registerGenericSign,
+    getStatus,
+    waitForCompletion,
+    readWebhookPing: parseWebhookPing,
     verifier,
+    registerMandate,
+    getMandateStatus,
+    waitForMandate,
     useMandate,
     getMandate,
     getMandateHistory,

@@ -1,18 +1,9 @@
 import type { Receipt } from "./types.js";
 import type { Statement } from "./statements.js";
 
-/** Take the holder receipt `receipt@2` out of the ceremony's result, as the string that arrived. */
+/** Take the receipt out of the ceremony's result, as the holder receipt `receipt@1` in string form. Clavis checks it when it receives it. */
 export function receiptFromCeremonyPayload(payload: unknown): Receipt {
   if (typeof payload !== "string" || payload.length === 0) {
-    throw new Error("Passkey confirmation did not return a receipt.");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    throw new Error("Passkey confirmation did not return a receipt.");
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || (parsed as { type?: unknown }).type !== "receipt@2") {
     throw new Error("Passkey confirmation did not return a receipt.");
   }
   return payload;

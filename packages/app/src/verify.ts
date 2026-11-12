@@ -92,10 +92,11 @@ export type MandateRecordFacts =
 /** What the verifier read from the full set of records (`mandate_history`) */
 export type MandateHistoryFacts = {
   grant: {
-    type: "mandate.grant@1";
+    type: "mandate.grant@1" | "mandate.grant.on_behalf@1";
     mandate: string;
     app: string;
     request: string;
+    onBehalf: { org: string; domain: string } | null;
   };
   terms: Record<string, unknown>;
   uses: { seq: number; operation: string; at: number; totals: MandateTotalsFacts }[];
@@ -130,10 +131,7 @@ export type TrustFacts = {
 export type Verifier = {
   /** Check the trust surface's documents against `trustRoot`, for instance to see whether `trustRoot` is this instance's Master */
   trust: () => Promise<TrustFacts>;
-  /**
-   * Check an app receipt (`receipt.app@1`) or a holder receipt the bundled verifier accepts (`receipt@1`).
-   * A `receipt@2` string is refused by `@clavis.nexus/collatio` 1.0.1 with `receipt_type`; that refusal is surfaced and not treated as acceptance.
-   */
+  /** Check an app receipt (`receipt.app@1`) or a holder receipt (`receipt@1`) */
   verifyReceipt: (receipt: string, options?: VerifyReceiptOptions) => Promise<VerifiedReceipt>;
   /** Check one delegation record, a use or a close. With `app`, the use's app JWT is checked too */
   verifyMandateRecord: (record: string, options?: { app?: string }) => Promise<MandateRecordFacts>;
@@ -326,17 +324,13 @@ export function createVerifier(opts: CreateVerifierOptions): Verifier {
     }));
     if (!answer.ok) throw refusal("invalid_mandate_record", "the mandate history", answer);
     const a = answer as unknown as {
-      grant: { type: string; mandate: string; app: string; request: string };
+      grant: { type: MandateHistoryFacts["grant"]["type"]; mandate: string; app: string; request: string; on_behalf: { org: string; domain: string } | null };
       terms: Record<string, unknown>;
       uses: MandateHistoryFacts["uses"];
       close: MandateHistoryFacts["close"];
     };
-    return {
-      grant: { type: a.grant.type as "mandate.grant@1", mandate: a.grant.mandate, app: a.grant.app, request: a.grant.request },
-      terms: a.terms,
-      uses: a.uses,
-      close: a.close,
-    };
+    const { on_behalf, ...grant } = a.grant;
+    return { grant: { ...grant, onBehalf: on_behalf }, terms: a.terms, uses: a.uses, close: a.close };
   }
 
   async function verifyLedgerBundle(bundle: string): Promise<LedgerBundleFacts> {

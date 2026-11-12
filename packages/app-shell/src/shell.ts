@@ -1,3 +1,4 @@
+import { HandoffShellError } from "./errors.js";
 import { resolveHandoffText } from "./text.js";
 import {
   HANDOFF_PHASE_IDS,
@@ -34,12 +35,44 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function assertConsumeUrl(value: string, allowedHosts: readonly string[]): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch (cause) {
+    throw new HandoffShellError("invalid_consume_url", "consume_url is not an absolute URL", { cause });
+  }
+  const host = url.hostname.toLowerCase();
+  const loopback = host === "localhost" || host === "127.0.0.1" || host === "::1";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new HandoffShellError(
+      "insecure_consume_url",
+      "consume_url must be https; http is accepted only on a loopback host",
+      { host },
+    );
+  }
+  if (url.username || url.password) {
+    throw new HandoffShellError("consume_url_credentials", "consume_url must not carry credentials", { host });
+  }
+  const allowed = allowedHosts.some((item) => item.trim().toLowerCase() === host);
+  if (!allowed) {
+    throw new HandoffShellError(
+      "consume_url_host_not_allowed",
+      `consume_url host ${host} is not in allowedConsumeHosts`,
+      { host },
+    );
+  }
+  return url.toString();
+}
+
 /**
- * Mount the preparation overlay and run `register`.
+ * Mount the preparation overlay, run `register`, then navigate to `consume_url`.
  * The app BFF performs registration; this package is UI only.
  *
  * On failure the overlay stays, shows the wording for the resolved language, and the promise
- * rejects with the error `register` threw.
+ * rejects with the error that caused it. An unusable `consume_url` rejects with a
+ * `HandoffShellError` whose `code` names the cause; anything `register` or `assign` threw is
+ * rethrown as it is.
  */
 export async function openHandoffShell(options: OpenHandoffShellOptions): Promise<void> {
   const mode = options.mode ?? "quiet";
@@ -47,6 +80,7 @@ export async function openHandoffShell(options: OpenHandoffShellOptions): Promis
   const text: HandoffText = resolveHandoffText(options.uiLocales, options.text);
   const title = options.title ?? text.title;
   const hint = options.hint ?? text.hint;
+  const assign = options.assign ?? ((url: string) => window.location.assign(url));
   const gap = resolveGap(options.phaseGapMs);
 
   const root = document.createElement("div");
@@ -177,10 +211,24 @@ export async function openHandoffShell(options: OpenHandoffShellOptions): Promis
   setPhase("digest");
   await sleep(gap);
   setPhase("register");
+  let registered: string;
   try {
-    await options.register({ appendLines });
+    registered = await options.register({ appendLines });
   } catch (error) {
     fail(error, true);
   }
+  let consumeUrl: string;
+  try {
+    consumeUrl = assertConsumeUrl(registered, options.allowedConsumeHosts);
+  } catch (error) {
+    fail(error, false);
+  }
+  setPhase("connect");
+  await sleep(gap);
   completePhases();
+  try {
+    assign(consumeUrl);
+  } catch (error) {
+    fail(error, false);
+  }
 }

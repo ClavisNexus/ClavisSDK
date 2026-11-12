@@ -2,23 +2,33 @@ export { createAppClient } from "./client.js";
 export type {
   AppClient,
   CommitLedgerInput,
-  CompleteSignInput,
-  CompletedSign,
   CreateAppClientOptions,
   FinishLedgerHandoffOptions,
   LedgerEvidence,
   LedgerHandoff,
+  IntentStatus,
+  IntentStatusCompleted,
+  IntentStatusIssued,
+  IntentStatusPending,
+  RegisterGenericSignInput,
+  RegisterResult,
+  StatusOptions,
+  WaitForCompletionOptions,
+  WebhookPing,
+  ExpectedMandate,
   MandateCallOptions,
   MandateCloseFacts,
   MandateHistory,
   MandateLedgerPosition,
+  MandateStatus,
+  MandateStatusCompleted,
   MandateUseFacts,
   MandateUseResult,
   MandateView,
-  SignInput,
-  SignProof,
-  SignStarted,
+  RegisterMandateInput,
+  RegisterMandateResult,
   UseMandateInput,
+  WaitForMandateOptions,
 } from "./client.js";
 export { createVerifier } from "./verify.js";
 export type {
@@ -39,6 +49,7 @@ export type { VerifierModule } from "./verifier.js";
 export {
   MANDATE_CLOSE_REASONS,
   MANDATE_GRANT,
+  MANDATE_GRANT_ON_BEHALF,
   MANDATE_VIOLATIONS,
   mandateCallDigest,
   mandateUseRequestBody,
@@ -59,6 +70,8 @@ export type {
   MandateUseRequest,
   MandateViolation,
 } from "./mandate.js";
+export { APP_SIGN_ON_BEHALF, normalizeOnBehalfDomain, readOnBehalf } from "./on-behalf.js";
+export type { OnBehalf } from "./on-behalf.js";
 export { digestOf } from "./digest.js";
 export { AppClientError } from "./errors.js";
 export type { AppClientErrorCode, AppClientErrorDetails } from "./errors.js";

@@ -18,7 +18,7 @@ const origins: SetupOrigins = {
 const ORG = "550e8400-e29b-41d4-a716-446655440000";
 const APP = "app-1";
 const SUB = "sub-1";
-const RECEIPT = JSON.stringify({ type: "receipt@2", statement: { type: "org.app.regions@1" } });
+const RECEIPT = JSON.stringify({ type: "receipt@1", statement: { type: "org.app.regions@1" } });
 
 type Call = { method: string; path: string; body: unknown };
 type Route = (call: Call) => { status?: number; body: unknown } | undefined;
