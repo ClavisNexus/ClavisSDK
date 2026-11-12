@@ -46,6 +46,12 @@ async function clientWith(respond: (call: Call) => Promise<Response> | Response)
   return { client, calls };
 }
 
+const INPUT_TERMS = {
+  operations: [{ name: "invoice.pay", label: " 請求書の  支払い " }],
+  uses: 5,
+  not_after: Math.floor(Date.now() / 1000) + 7 * 86400,
+};
+
 const useInput = {
   operation: USE2_REQUEST.operation as string,
   call: USE2_REQUEST.call as string,
@@ -106,6 +112,60 @@ describe("prepareMandateTerms (same rules as Clavis)", () => {
 });
 
 describe("createAppClient: mandates", () => {
+  it("registers a mandate and keeps the terms the user will sign", async () => {
+    const { client, calls } = await clientWith(async (call) => {
+      const claims = decodeJwt(JSON.parse(call.body!).registration as string) as Record<string, unknown>;
+      const terms = (claims.payload as { terms: unknown }).terms;
+      return Response.json({
+        payload: {
+          request_id: "eu1.rid",
+          poll_secret: "secret",
+          consume_url: `${API_ORIGIN}/app/intent-requests/consume-mandate/eu1.rid`,
+          mandate: { id: MANDATE_ID, terms },
+        },
+      });
+    });
+    const out = await client.registerMandate({ terms: INPUT_TERMS, allowedSub: SUB });
+    expect(out.mandate).toEqual({
+      id: MANDATE_ID,
+      terms: { type: "mandate.terms@1", ...INPUT_TERMS, operations: [{ name: "invoice.pay", label: "請求書の 支払い" }] },
+    });
+    const claims = decodeJwt(JSON.parse(calls[0]!.body!).registration as string);
+    expect(claims).toMatchObject({ intent_type: "mandate", allowed_sub: SUB, app_id: APP_ID });
+    expect(Object.keys(claims.payload as object)).toEqual(["terms"]);
+  });
+
+  it("refuses terms Clavis changed, and bad terms before sending", async () => {
+    const { client, calls } = await clientWith(() =>
+      Response.json({
+        payload: {
+          request_id: "eu1.rid",
+          poll_secret: "secret",
+          consume_url: `${API_ORIGIN}/app/intent-requests/consume-mandate/eu1.rid`,
+          mandate: { id: MANDATE_ID, terms: { type: "mandate.terms@1", ...INPUT_TERMS, uses: 50, operations: [{ name: "invoice.pay", label: "請求書の 支払い" }] } },
+        },
+      }),
+    );
+    await expect(client.registerMandate({ terms: INPUT_TERMS, allowedSub: SUB })).rejects.toMatchObject({ code: "mandate_terms_mismatch" });
+    await expect(client.registerMandate({ terms: { ...INPUT_TERMS, uses: 0 }, allowedSub: SUB })).rejects.toMatchObject({ code: "invalid_mandate_terms" });
+    await expect(client.registerMandate({ terms: INPUT_TERMS, allowedSub: "" })).rejects.toMatchObject({ code: "invalid_allowed_sub" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("reads the completed grant only when it binds the requested mandate and terms", async () => {
+    const request = GRANT.statement.request;
+    const { client } = await clientWith(() =>
+      Response.json({ payload: { state: "completed", request_id: request, intent_type: "mandate", receipt: H.grant, mandate: { id: MANDATE_ID, terms: TERMS } } }),
+    );
+    const done = await client.getMandateStatus(request, "secret", { id: MANDATE_ID, terms: TERMS });
+    expect(done).toMatchObject({ state: "completed", mandate: MANDATE_ID, sub: SUB, grantedAt: GRANT.envelope.iat, receipt: H.grant });
+    await expect(client.getMandateStatus(request, "secret", { id: MANDATE_ID, terms: { ...TERMS, uses: TERMS.uses + 1 } })).rejects.toMatchObject({
+      code: "mandate_mismatch",
+    });
+    // 署名の完了として読もうとしても通らない
+    await expect(client.getStatus(request, "secret", "A".repeat(43))).rejects.toMatchObject({ code: "invalid_status" });
+  });
+
   it("has Collatio check the whole history the store returns, as the strings it returned", async () => {
     const history = {
       view: {

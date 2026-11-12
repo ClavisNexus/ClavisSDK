@@ -1,5 +1,5 @@
 /** The preparation phases, in the order the overlay shows them. Order is part of the public UX contract. */
-export const HANDOFF_PHASE_IDS = ["digest", "register"] as const;
+export const HANDOFF_PHASE_IDS = ["digest", "register", "connect"] as const;
 
 export type HandoffPhaseId = (typeof HANDOFF_PHASE_IDS)[number];
 
@@ -17,7 +17,7 @@ export type HandoffText = {
   errorHint: string;
   /** Shown when another attempt may get through (the `register` step failed). */
   errorRetry: string;
-  /** Shown when another attempt will not help. */
+  /** Shown when another attempt will not help (`consume_url` unusable, navigation refused). */
   errorBlocked: string;
 };
 
@@ -39,6 +39,7 @@ export type OpenHandoffShellOptions = {
   hint?: string;
   /**
    * BCP 47 language tags for the overlay, in order of preference.
+   * Pass the same list you give `uiLocales` on the server so Connect and this overlay read alike.
    * Omitting it follows the browser's languages, then `en`.
    */
   uiLocales?: readonly string[];
@@ -50,9 +51,17 @@ export type OpenHandoffShellOptions = {
   /** Mount node; default document.body */
   parent?: HTMLElement;
   /**
-   * Call the app BFF. The shell owns phase order and the gap between phases.
+   * Call the app BFF and return consume_url.
+   * The shell owns phase order and the gap between phases.
    */
-  register: (ctx: HandoffRegisterContext) => Promise<void>;
+  register: (ctx: HandoffRegisterContext) => Promise<string>;
+  /**
+   * Hostnames allowed for consume_url (the API host, e.g. `api.clavis.nexus`).
+   * The shell navigates only to an https URL on this list; http is accepted only on a loopback host.
+   */
+  allowedConsumeHosts: readonly string[];
+  /** Defaults to window.location.assign */
+  assign?: (url: string) => void;
   /**
    * Milliseconds between phase advances. Reduced motion forces 0.
    * Values above 420 are capped.

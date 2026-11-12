@@ -2,13 +2,14 @@ import type { HandoffPhaseId, HandoffText, HandoffTextOverride } from "./types.j
 
 const EN: HandoffText = {
   title: "Getting ready to sign",
-  hint: "Registering the request you will sign.",
+  hint: "Registering the request Connect will ask you to approve.",
   streamTitle: "Progress",
   phases: {
     digest: "Prepare the details",
     register: "Register the request",
+    connect: "Hand over to Connect",
   },
-  errorTitle: "Preparation stopped",
+  errorTitle: "Couldn't reach Connect",
   errorHint: "Nothing has been signed.",
   errorRetry: "Try again in a moment.",
   errorBlocked: "Please contact this site's support.",
@@ -16,11 +17,12 @@ const EN: HandoffText = {
 
 const JA: HandoffText = {
   title: "署名の準備",
-  hint: "署名する内容を登録しています。",
+  hint: "Connect へ渡す操作内容を登録しています。",
   streamTitle: "進行状況",
   phases: {
     digest: "内容を準備",
     register: "署名依頼を登録",
+    connect: "Connect へ",
   },
   errorTitle: "準備を中断しました",
   errorHint: "署名はまだ行われていません。",

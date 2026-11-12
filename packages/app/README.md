@@ -1,8 +1,8 @@
 # `@clavis.nexus/app`
 
-Server SDK for Node 24 and later (ESM). The browser preparation overlay is [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
+Server SDK for Node 24 and later (ESM). The browser handoff shell is [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
 
-A signature or a delegation is two relay calls. `sign` sends `POST /relay/v1/sign`. `completeSign` sends `POST /relay/v1/sign/complete` and returns the `receipt@2` string. The bundled verifier (`@clavis.nexus/collatio` 1.0.1) refuses that string with `receipt_type`. Store the string. That refusal is the verifier's answer.
+Pass a SHA-256 digest as Base64URL (43 characters) in `messageDigest`. The caller prepares that string. The user signs the statement `app.sign@1`, which Clavis builds from it, with a passkey. Store the registration response's `pollSecret` on your server, and read completion with `getStatus` or `waitForCompletion`. A completion carries an app receipt (`receipt.app@1`).
 
 ## Install
 
@@ -12,12 +12,12 @@ npm install @clavis.nexus/app
 
 Load it with `import`. Pass Clavis's Master public JWK as `trustRoot`. The value is on docs.clavis.nexus. `createAppClient` fails at construction when it is missing.
 
-Receipts the bundled verifier accepts, delegation records and ledger proof bundles are checked with the Collatio verifier shipped in the SDK. The aggregate JWKS and the catalog come from the trust surface (`https://trust.clavis.nexus`), and the verifier checks that they chain to `trustRoot`. Passing the 2.x option `masterPublicJwkJson` throws `removed_option`.
+Receipts, delegation records and ledger proof bundles are checked with the Collatio verifier shipped in the SDK. The aggregate JWKS and the catalog come from the trust surface (`https://trust.clavis.nexus`), and the verifier checks that they chain to `trustRoot`. Passing the 2.x option `masterPublicJwkJson` throws `removed_option`.
 
-## Sign
+## Register
 
 ```ts
-import { createAppClient, digestOf } from "@clavis.nexus/app";
+import { createAppClient } from "@clavis.nexus/app";
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -29,42 +29,95 @@ const app = createAppClient({
   apiOrigin: "https://api.clavis.nexus",
   appId: requiredEnv("CLAVIS_APP_ID"),
   operatePrivateJwk: requiredEnv("OPERATE_PRIVATE_JWK"),
-  entityId: requiredEnv("CLAVIS_ENTITY_ID"),
-  requestPrivateJwk: requiredEnv("REQUEST_PRIVATE_JWK"),
   trustRoot: requiredEnv("CLAVIS_TRUST_ROOT"),
 });
 
-const started = await app.sign({
-  statement,
-  signer,
-  key: await digestOf(publicJwk),
-});
-// Give started.challenge to the authenticator. Keep started.envelope on the server.
+type PollRecord = { pollSecret: string; messageDigest: string };
 
-const { receipt } = await app.completeSign({
-  envelope: started.envelope,
-  proof: { authenticator_data, client_data_json, signature },
+async function start(
+  messageDigest: string,
+  save: (requestId: string, record: PollRecord) => Promise<void>,
+): Promise<Response> {
+  const { requestId, pollSecret, consumeUrl } = await app.registerGenericSign({
+    messageDigest,
+    returnUrl: "https://console.example/done",
+    displayHint: "Change billing account",
+  });
+  await save(requestId, { pollSecret, messageDigest });
+  return Response.json({ consume_url: consumeUrl, request_id: requestId });
+}
+```
+
+`save` writes to your session or key-value store. The JSON returned to the browser is `consume_url` and `request_id`. Leave `pollSecret` on the server.
+
+`operatePrivateJwk` is an Ed25519 private JWK.
+
+A request lives for 120 seconds by default. The user starts signing on Connect within that time. `ttlSeconds` sets it between 60 and 900 seconds. The cap is the setting on the app in developers (300 seconds by default). Going over it is `register_failed` (`apiError` is `REGISTRATION_TTL_TOO_LONG`).
+
+`displayHint` is the one line (the operation) Connect shows before the signature. The line shown is part of the signature. To name one signer, pass that person's ID in this app as `allowedSub` (the OIDC `sub`, the same value as `sub` on completion).
+
+## Completion
+
+```ts
+const completed = await app.waitForCompletion(requestId, pollSecret, {
+  expectedMessageDigest: messageDigest,
 });
 ```
 
-`entityId` is `sha256:` and 43 unpadded Base64URL characters. `requestPrivateJwk` is an Ed25519 or P-256 private JWK. The protected header is only `{ alg, typ: "clavis-entity+jws", kid }`. `alg` is `EdDSA` or `ES256`. `kid` is the digest of the public JWK.
+`completed.state` is `"completed"`. The SDK fills `intentType`, `statementType` (`app.sign@1`), `messageDigest`, `sub`, `signedAt`, `receipt` and `anchor` from the receipt the verifier checked. `sub` is the user's ID in this app. It differs from app to app and is the same as the OIDC `sub`.
 
-Claims are only `entity`, `htm`, `htu`, `body_sha256`, `iat`, `exp` and `jti`. `body_sha256` is the lowercase hex SHA-256 of the exact body bytes, and is omitted when there is no body. `exp - iat` is 60 seconds. `jti` is 22 unpadded Base64URL characters from 16 random bytes. `htu` lowercases the scheme and host and drops a default port.
+`receipt` is the receipt string Clavis returned, as-is. Store that string, and show it to the user or a third party.
 
-The body is RFC 8785 canonical JSON. `sign` sends `{ statement, signer, suite: "webauthn.relayed@1", key }` and `link_lookup` when you set `linkLookup`. The answer is `{ envelope, dimension, challenge }`.
+To read once, call `getStatus(requestId, pollSecret, messageDigest)`. The third argument is the digest from registration. A completion whose digest differs is `AppClientError` with `digest_mismatch`. The binding `aud` has to be `request:<requestId>` for this request of this app. Any other binding is `receipt_invalid` or `status_request_mismatch`. When the verifier refuses the receipt, the error is `receipt_invalid` and `verifierReason` holds the verifier's reason.
 
-`completeSign` sends `{ envelope, proof }`. `envelope` on the wire is the digest of the envelope object. `proof` is `{ authenticator_data, client_data_json, signature }`. The success body is `{ receipt }`, and `receipt` contains `receipt@2`. The SDK returns that string. Request bodies and proof bytes stay out of logs.
+`waitForCompletion` defaults to an interval of 2.5 seconds and `timeout` at 120 seconds. Fetches in flight while waiting are cut off at the same deadline. Passing `signal` ends the wait with `aborted`. Clavis allows 30 status reads a minute for one request. A read that hits the limit (HTTP 429) leaves the wait running, and the next reads are spaced further apart.
 
-`operatePrivateJwk` is an Ed25519 private JWK. Delegation use and ledger calls still sign with it (`Authorization: ClavisApp`).
+After the request lifetime, status is `status_failed` (HTTP `status` 404, `apiError` `NOT_FOUND`). A request whose signing has started stays readable for 15 minutes after completion.
+
+## Webhook
+
+```ts
+async function onWebhook(
+  body: unknown,
+  load: (requestId: string) => Promise<{ pollSecret: string; messageDigest: string }>,
+) {
+  const ping = app.readWebhookPing(body);
+  const record = await load(ping.requestId);
+  return app.getStatus(ping.requestId, record.pollSecret, record.messageDigest);
+}
+```
+
+`readWebhookPing` returns `event`, `requestId`, `intentType` and `state`. A ping carries no signature and no receipt. It asks you to read status. Read the completion with `getStatus` afterwards, and have the verifier check the receipt.
 
 ## Delegation
 
-Prepare terms with `prepareMandateTerms`. Put the normalised terms in the statement you pass to `sign`, then finish with `completeSign`. Labels are normalised to NFC, with runs of white space collapsed. Characters that change direction, and control characters, are refused. Operations and counterparties are reordered by identifier. The expiry is more than 5 minutes and at most 30 days after the request. Uses run from 1 to 1,000. Amounts are integers in the currency's minor unit (1 for yen, cents for a dollar).
+The user signs a set of terms once — operations, counterparties, amounts, uses, expiry and the actor — and your server or agent acts within them. Clavis refuses an action outside the terms. The user can revoke at any time under Delegations in their account.
+
+```ts
+const { requestId, pollSecret, consumeUrl, mandate } = await app.registerMandate({
+  terms: {
+    operations: [{ name: "invoice.pay", label: "Pay invoices" }],
+    targets: [{ id: "vendor_a", label: "Acme Ltd" }],
+    amount: { currency: "JPY", per_use: 50_000, total: 200_000 },
+    uses: 10,
+    not_after: Math.floor(Date.now() / 1000) + 14 * 86_400,
+    agent: { id: "https://agent.example/client", label: "Payments agent" },
+  },
+  allowedSub: sub,
+  returnUrl: "https://console.example/delegated",
+});
+// Store requestId, pollSecret and mandate on the server, and send the user to consumeUrl
+
+const granted = await app.waitForMandate(requestId, pollSecret, mandate);
+// Store granted.receipt (the grant's app receipt, as a string)
+```
+
+`label` is the name Connect shows the user. Labels are normalised to NFC, with runs of white space collapsed. Characters that change direction, and control characters, are refused. Operations and counterparties are reordered by identifier. The expiry is more than 5 minutes and at most 30 days after the request. Uses run from 1 to 1,000. Amounts are integers in the currency's minor unit (1 for yen, cents for a dollar). Only the person in `allowedSub` can sign.
 
 Before each action within the terms, call `useMandate` so Clavis checks and counts it.
 
 ```ts
-const { record } = await app.useMandate(mandateId, {
+const { record } = await app.useMandate(mandate.id, {
   operation: "invoice.pay",
   target: "vendor_a",
   amount: 30_000,
@@ -72,6 +125,7 @@ const { record } = await app.useMandate(mandateId, {
   call: await mandateCallDigest({ invoice: "inv_123", amount: 30_000 }),
   use: useId,
 });
+// Act on the payment once record comes back
 ```
 
 `call` is the digest of the call you are about to make. A record (`mandate.use@1`) carries the request your app signed with the operate key (a JWT) and Clavis's countersignature (the `mandate-attest` key in the aggregate JWKS). `record` is the record string Clavis returned, as-is. `use` is the facts the verifier read from that record (`seq`, `operation`, `totals` and the rest). The SDK passes the record to the verifier, checks the countersignature and your app's JWT, and checks that the request in the record is the body you sent. When the response does not arrive, send again with the same `use` (a UUID). The same record comes back (`replayed: true`) and is counted once. When the uses or the amount run out, a close record comes back with it (`close`: the string and the facts).
@@ -87,21 +141,36 @@ Outside the terms is `mandate_outside`. `violations` lists why (`amount_total`, 
 
 Stored records can be checked again with `app.verifier.verifyMandateHistory({ grant, terms, uses, close })`. Pass the grant receipt, the use records and the close record as the strings you kept. Turn the terms into a string with `JSON.stringify(terms)`. A single record is `verifyMandateRecord(record, { app })`. That check accepts a delegation record under the mandate attestation key. The receipt key (`sign-receipt`) refuses it.
 
-## Receipt
+## On behalf of an organisation
 
-`completeSign` returns a holder receipt (`receipt@2`) as the string that arrived. Carry that string. Parsing it with `JSON.parse` and stringifying again collapses duplicate keys, and a later check can no longer refuse them.
-
-Ask the bundled verifier to read that string and it refuses with `receipt_type`:
+Ask for a signature or a delegation on behalf of an organisation. Only a person designated as a signer for that organisation can sign, and the receipt's statement is `app.sign.on_behalf@1` (a delegation is `mandate.grant.on_behalf@1`). Turn on “Request on behalf of an organisation” under the app's allowed Intents. The signer's organisation needs no Clavis plan.
 
 ```ts
-import { createVerifier } from "@clavis.nexus/app";
+const { requestId, pollSecret, consumeUrl, onBehalf } = await app.registerGenericSign({
+  messageDigest,
+  displayHint: "Approve purchase order",
+  onBehalf: { domain: "supplier.example" },
+});
+// Store requestId, pollSecret, messageDigest and onBehalf on the server
 
-const verifier = createVerifier({ trustRoot: requiredEnv("CLAVIS_TRUST_ROOT"), apiOrigin: "https://api.clavis.nexus" });
-await verifier.verifyReceipt(receipt);
-// AppClientError code receipt_invalid, verifierReason receipt_type
+const completed = await app.waitForCompletion(requestId, pollSecret, {
+  expectedMessageDigest: messageDigest,
+  expectedOnBehalf: onBehalf,
+});
+// completed.onBehalf is { org, domain }
 ```
 
-The same verifier still answers a `receipt@1` or `receipt.app@1` string it already accepts. An app receipt (`receipt.app@1`) is Clavis's countersignature of a passkey signature from that shape. Carry and store it as a string.
+`domain` is a domain the organisation confirmed in Clavis through DNS. Send it lowercased, with a trailing dot dropped. The `onBehalf` in the registration result is that form. Pass internationalised domains in Punycode (`xn--`).
+
+When you read the completion, pass the registration result's `onBehalf` as `expectedOnBehalf`. With it, the SDK checks that the receipt was made on behalf of that organisation's domain. Without it, the SDK checks that the receipt names no organisation. A mismatch is `on_behalf_mismatch`.
+
+`completed.onBehalf.org` is the organisation's ID in Clavis. It stays the same if the domain changes. The receipt shows that Clavis confirmed, at completion, that the person who signed was designated as a signer for that organisation.
+
+A delegation is `registerMandate({ …, onBehalf: { domain } })`. The result's `mandate` includes `onBehalf`, and `waitForMandate` checks it. When the signer designation ends, the delegation closes (close record `mandate.close@1`, reason `signer_designation_ended`). Only a delegation granted on behalf of an organisation closes with this reason.
+
+## Receipt
+
+An app receipt (`receipt.app@1`) is Clavis's countersignature that it accepted the user's passkey signature. Carry and store the receipt as a string. Parsing it with `JSON.parse` collapses duplicate keys into one, and the verifier can no longer refuse them.
 
 ```jsonc
 {
@@ -128,9 +197,9 @@ The same verifier still answers a `receipt@1` or `receipt.app@1` string it alrea
 }
 ```
 
-`ledger.receipt@1` inside an attestation is the ledger's receipt for the receipt's mark — a commitment made from the binding and the proof digest — appended to a first-party shard of Clavis's ledger. The holder receipt `completeSign` returns is `receipt@2`.
+`envelope.ext["shown@1"]` is the app name, host and operation the user saw just before signing. `ledger.receipt@1` is the ledger's receipt for the receipt's mark — a commitment made from the binding and the proof digest — appended to a first-party shard of Clavis's ledger.
 
-After the SDK checks a receipt the verifier accepts, it fetches that shard's checkpoint from the trust surface and Clavis's inclusion proof (`GET {apiOrigin}/archive/ledger/<log>/proof`), and checks that the receipt's mark was appended to the ledger. The result is `anchor.state`.
+After the SDK checks the receipt, it fetches that shard's checkpoint from the trust surface and Clavis's inclusion proof (`GET {apiOrigin}/archive/ledger/<log>/proof`), and checks that the receipt's mark was appended to the ledger. The result is `anchor.state`.
 
 | `anchor.state` | Meaning |
 |----------------|---------|
@@ -138,6 +207,18 @@ After the SDK checks a receipt the verifier accepts, it fetches that shard's che
 | `unanchored` | Still unchecked. `reason` is `pending` (waiting for the next checkpoint, about a minute), `unavailable` (the trust surface or the inclusion proof cannot be read) or `skipped` (`anchor: "skip"`) |
 
 When the inclusion proof does not lead to the root of the trust surface's checkpoint, the error is `anchor_invalid`.
+
+A stored receipt can be checked later, without the app's operate key.
+
+```ts
+import { createVerifier } from "@clavis.nexus/app";
+
+const verifier = createVerifier({ trustRoot: requiredEnv("CLAVIS_TRUST_ROOT"), apiOrigin: "https://api.clavis.nexus" });
+const verified = await verifier.verifyReceipt(storedReceipt, { expect: { aud: `request:${requestId}` } });
+// verified.statement, verified.envelope, verified.anchor
+```
+
+The proof is a digest (`holderProof`), carried so it can be matched against the holder's own receipt. The app receipt holds that digest in place of a passkey public key or credential ID.
 
 ## Cloudflare Workers and similar runtimes
 
@@ -150,14 +231,12 @@ const app = createAppClient({
   apiOrigin: "https://api.clavis.nexus",
   appId: env.CLAVIS_APP_ID,
   operatePrivateJwk: env.OPERATE_PRIVATE_JWK,
-  entityId: env.CLAVIS_ENTITY_ID,
-  requestPrivateJwk: env.REQUEST_PRIVATE_JWK,
   trustRoot: env.CLAVIS_TRUST_ROOT,
   verifiers: [{ digest: "sha256:…", module: collatio }],
 });
 ```
 
-`digest` is the digest of that `collatio.wasm`, given in the `@clavis.nexus/collatio` README (`moduleDigest` from `@clavis.nexus/collatio` computes it from the bytes). When a receipt the verifier accepts names a verifier the SDK does not hold, Node checks that it is in the catalog, fetches it from the trust surface, checks the hash and uses it. On other runtimes the error is `verifier_unavailable`.
+`digest` is the digest of that `collatio.wasm`, given in the `@clavis.nexus/collatio` README (`moduleDigest` from `@clavis.nexus/collatio` computes it from the bytes). When the receipt names a verifier the SDK does not hold, Node checks that it is in the catalog, fetches it from the trust surface, checks the hash and uses it. On other runtimes the error is `verifier_unavailable`.
 
 ## Errors
 
@@ -166,24 +245,30 @@ Failures are `AppClientError`. It carries `code`, the HTTP `status`, and `apiErr
 | `code` | When |
 |--------|------|
 | `invalid_api_origin` | `apiOrigin` is not an https origin (stopped at construction) |
-| `invalid_entity_id` | `entityId` is not `sha256:` and 43 unpadded Base64URL characters |
-| `invalid_request_jwk` | `requestPrivateJwk` is not an Ed25519 or P-256 private JWK |
-| `invalid_sign_input` | `statement`, `signer`, `key`, `envelope` or `proof` is the wrong shape. Stopped before sending, or the request URL cannot be signed |
-| `sign_failed` | The relay refused the request. `apiError` holds the API's code |
-| `invalid_sign_response` | The relay response is not `{ envelope, dimension, challenge }` or `{ receipt }` with a `receipt@2` string |
+| `register_failed` | Registration was refused. `apiError` holds the API's code |
+| `invalid_register_response` | The register response has the wrong shape. The same code covers a `consume_url` whose origin differs from `apiOrigin` |
+| `invalid_message_digest` | `messageDigest` is not SHA-256 as Base64URL (43 characters). Stopped before sending |
+| `invalid_ui_locales` | `uiLocales` is not a list of language tags. Stopped before sending |
+| `digest_mismatch` | The digest in the completion differs from the digest at registration |
 | `removed_option` | The 2.x option `masterPublicJwkJson` was passed (stopped at construction) |
 | `invalid_trust_root` | `trustRoot` is not the Master public JWK (EC P-256), or the trust documents on the trust surface fail to chain to it |
 | `invalid_trust_origin` | `apiOrigin` is not `api.<apex>`, and `trustOrigins` is absent (stopped at construction) |
 | `trust_unavailable` | The trust documents cannot be read from the trust surface |
 | `verifier_unavailable` | The receipt names a verifier this process lacks. Pass it in `verifiers` |
-| `receipt_invalid` | The verifier refused the receipt. `verifierReason` holds the verifier's reason. For a `receipt@2` string that reason is `receipt_type` |
+| `status_request_mismatch` | The status or the receipt belongs to another `requestId`, or to another app |
+| `receipt_invalid` | The verifier refused the receipt. `verifierReason` holds the verifier's reason |
 | `anchor_invalid` | The inclusion proof does not meet the root of the trust surface's checkpoint |
-| `mandate_mismatch` | The grant receipt is not for this mandate of this app |
+| `invalid_mandate_terms` | The terms break a rule. Stopped before sending. The reason is `shape`, `label`, `duplicate` or `lifetime` |
+| `mandate_terms_mismatch` | The terms in the register response differ from the normalised terms you sent |
+| `mandate_mismatch` | The grant receipt binds a delegation ID or terms other than the ones you requested |
 | `mandate_outside` | The use falls outside the terms. `violations` lists why |
 | `mandate_closed` | The delegation was revoked, or has ended |
 | `mandate_use_conflict` | The same `use` was sent with another body |
-| `mandate_not_allowed` | Delegation is unavailable for this app |
+| `mandate_not_allowed` | Delegation is unavailable for this app (Intent type, the signature declaration, the subscription) |
 | `invalid_mandate_record` | The verifier refused the record, or the record belongs to another delegation or another request |
+| `invalid_on_behalf` | `onBehalf.domain` is not a domain name. Stopped before sending |
+| `on_behalf_mismatch` | The completion receipt names an organisation other than the one you asked for. A receipt that names an organisation when the request named none is `invalid_status` |
+| `timeout` | `waitForCompletion` reached its deadline |
 | `ledger_bundle_invalid` | The verifier refused the ledger proof bundle |
 | `network_error` | A fetch failed |
 
@@ -207,6 +292,21 @@ const handoff = await app.commitLedger({
 After a checkpoint (about 60 seconds), `finishLedgerHandoff(handoff)` adds that opening to the proof bundle (`ledger.bundle@1`), has the verifier check it, and returns `{ bundle, facts }`. `bundle` is the string to hand over. `facts` is what the verifier checked (`log`, `index`, `committedBy`, `opening`, `anchor`). To wait for the anchor's timestamp proof, pass `{ waitForAnchor: true }`. The default wait is about 75 minutes.
 
 Check a proof bundle you received with `createVerifier(...).verifyLedgerBundle(bundle)`. When there is an anchor, `facts.anchor.tsa` is the count of timestamp tokens that chain to a root in the verifier's registry. Certificate revocation is a separate check, left to the caller.
+
+## Screen language
+
+To line Connect's confirmation screen up with your app's language, pass BCP 47 language tags in `uiLocales`, in order of preference. Use the language you wrote `displayHint` in.
+
+```ts
+await app.registerGenericSign({
+  messageDigest,
+  returnUrl: "https://console.example/done",
+  displayHint: "管理者権限の付与",
+  uiLocales: ["ja"],
+});
+```
+
+Connect chooses from the languages it has open, in this order. It skips a language it has closed. When none of the tags are open, it uses the user's choice and the browser's language. Omitting `uiLocales` follows the same rule.
 
 ## License
 
