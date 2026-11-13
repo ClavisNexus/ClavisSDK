@@ -13,10 +13,6 @@ overrides:
 
 # 7 days. Install-time block; scripts/audit-min-release-age.mjs is the CI double-check.
 minimumReleaseAge: 10080
-# Our own verifier: its host matches the Collatio tag v1.0.1 and its collatio.wasm the reproducible build
-# (repro/run.sh). Drop the entry once it is 7 days old (2026-10-27).
-minimumReleaseAgeExclude:
-  - "@clavis.nexus/collatio@1.0.1"
 trustPolicy: no-downgrade
 # Published by their maintainers without provenance after earlier-published versions had it (pnpm judges by publish date).
 trustPolicyExclude:
