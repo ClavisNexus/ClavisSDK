@@ -2,8 +2,7 @@ import { defineConfig } from "tsup";
 
 const shared = {
   format: ["esm"] as ["esm"],
-  // tsup sets baseUrl for the .d.ts build, which TypeScript 6 reports as deprecated
-  dts: { compilerOptions: { ignoreDeprecations: "6.0" } },
+  dts: true,
   sourcemap: true,
   splitting: false,
   treeshake: true,

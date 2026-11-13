@@ -4,7 +4,7 @@ packages:
 overrides:
   tinypool: 2.1.2
   source-map-js: 1.2.2
-  esbuild: 0.28.1
+  esbuild: 0.28.2
   "vite@<7.3.7": ^7.3.7
   # jsdom pulls undici 8.12.1 (GHSA-xjj6-f33q-929c and the three other highs fixed in 8.12.2).
   "undici@<8.12.2": ^8.12.2
@@ -14,7 +14,4 @@ overrides:
 # 7 days. Install-time block; scripts/audit-min-release-age.mjs is the CI double-check.
 minimumReleaseAge: 10080
 trustPolicy: no-downgrade
-# Published by their maintainers without provenance after earlier-published versions had it (pnpm judges by publish date).
-trustPolicyExclude:
-  - "chokidar@4.0.3"
 blockExoticSubdeps: true
