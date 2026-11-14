@@ -31,6 +31,8 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
+      - if: github.event_name != 'schedule'
+        run: node .github/public-surface.mjs
       # Reads the lockfile only (pnpm ls --lockfile-only), before any dependency is downloaded
       - run: node scripts/audit-min-release-age.mjs
       - run: pnpm run audit:security
