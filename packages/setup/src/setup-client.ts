@@ -190,11 +190,9 @@ export type SetupClient = {
 
 type RequireSession = { session: DevelopersSession; origins: SetupOrigins };
 
-async function requireSession(client: {
-  origins: SetupOrigins;
-  sessionPath?: string;
-}): Promise<SetupResult<RequireSession>> {
-  const stored = await loadSession(client.sessionPath);
+/** The saved session and the origins it was saved with (`saveSession` always writes both) */
+async function requireSession(sessionPath?: string): Promise<SetupResult<RequireSession>> {
+  const stored = await loadSession(sessionPath);
   if (!stored?.session?.accessToken) {
     return {
       ok: false,
@@ -205,7 +203,7 @@ async function requireSession(client: {
       },
     };
   }
-  return { ok: true, data: { session: stored.session, origins: stored.origins ?? client.origins } };
+  return { ok: true, data: { session: stored.session, origins: stored.origins } };
 }
 
 /**
@@ -305,7 +303,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
       const checked = checkOrgCreationTerms(terms);
       if (!checked.ok) return checked;
       const { incorporation } = checked;
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const apiOrigin = auth.data.origins.apiOrigin;
       // A closed place of incorporation is refused before the passkey; when the list cannot be read, the challenge's own gate decides.
@@ -376,7 +374,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
     },
 
     async orgAnchorFinish(args) {
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const payload = await pollCeremonyResult({
         apiOrigin: auth.data.origins.apiOrigin,
@@ -417,7 +415,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
       const checked = checkOrgCreationTerms(args);
       if (!checked.ok) return checked;
       const { incorporation } = checked;
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       try {
         const out = await api.postVerifyAnchor(auth.data.origins.apiOrigin, auth.data.session.accessToken, {
@@ -443,7 +441,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
     },
 
     async policyBootstrap(orgId) {
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const detail = await api.getOrg(auth.data.origins.apiOrigin, auth.data.session.accessToken, orgId);
       try {
@@ -477,7 +475,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
       const checked = checkOrgCreationTerms(args, INCORPORATION_TERMS_HUMAN);
       if (!checked.ok) return checked;
       const code = checked.incorporation;
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const sub = auth.data.session.sub;
       if (!sub) return { ok: false, error: "session_missing_sub — re-login" };
@@ -517,7 +515,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
     async cardCheckout(orgId, opts = {}) {
       const offer = opts.offer === "bundle" ? "bundle" : "meter";
       const lang = checkoutLang(opts.lang);
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const sub = auth.data.session.sub;
       if (!sub) return { ok: false, error: "session_missing_sub — re-login" };
@@ -603,7 +601,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
     },
 
     async appRegister(args) {
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const sub = auth.data.session.sub;
       if (!sub) return { ok: false, error: "session_missing_sub — re-login" };
@@ -652,7 +650,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
     },
 
     async appHostPlan(orgId, appId) {
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const ch = await api.getHostChallenge(auth.data.origins.apiOrigin, auth.data.session.accessToken, orgId, appId);
       return {
@@ -670,7 +668,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
     },
 
     async appVerifyHost(args) {
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const ch = await api.getHostChallenge(
         auth.data.origins.apiOrigin,
@@ -712,7 +710,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
     },
 
     async declarationSet(args) {
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const declaration = { endUsers: args.endUsers, uses: args.uses };
       const cer = await runPasskeyCeremony({
@@ -737,7 +735,7 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
       const read = readAppRegionsInput(args.regions);
       if (!read.ok) return read;
       const regions = read.regions;
-      const auth = await requireSession({ origins, sessionPath });
+      const auth = await requireSession(sessionPath);
       if (!auth.ok) return auth;
       const sub = auth.data.session.sub;
       if (!sub) return { ok: false, error: "session_missing_sub — re-login" };

@@ -45,15 +45,7 @@
           "do_not_enforce_on_create": false,
           "required_status_checks": [
             {
-              "context": "release-age",
-              "integration_id": 15368
-            },
-            {
-              "context": "audit",
-              "integration_id": 15368
-            },
-            {
-              "context": "check",
+              "context": "ci",
               "integration_id": 15368
             }
           ]
