@@ -19,8 +19,8 @@ importers:
   packages/app:
     dependencies:
       '@clavis.nexus/collatio':
-        specifier: 1.0.2
-        version: 1.0.2
+        specifier: 1.0.3
+        version: 1.0.3
       jose:
         specifier: 6.2.13
         version: 6.2.13
@@ -92,9 +92,9 @@ packages:
     resolution: {integrity: sha512-0GEz8qJWokkUVYQYRukmkSHIFNoBH8QTreeHrAFbvz1XFYc3Y+puhMs8PQ5x8GNugiC2l5jvDBXKLbBIByeSBw==}
     hasBin: true
 
-  '@clavis.nexus/collatio@1.0.2':
-    resolution: {integrity: sha512-Mdls8fRXhcg1m99nK3X/ZH8DsXcKDS2WN2qhH0qsnN3ND4uuqom6BoETc72J7y8/UN6v7Hl4cZiSGNKIKnswGg==}
-    engines: {node: '>=20'}
+  '@clavis.nexus/collatio@1.0.3':
+    resolution: {integrity: sha512-IsAvPzA7/Y6JJRz1cN8IqKNZXDPS9Qz0S6f6CWWQX1Mhn39ZjPDUCsWyddmo2ysMh0xwSJhG2Ic+CwDbEns7Tw==}
+    engines: {node: '>=24'}
 
   '@csstools/color-helpers@6.1.2':
     resolution: {integrity: sha512-grhRy3OKmniaAEKXMjua5z/EODX0MSqBGjunw8+j/3HQjOnahs2AGhvEOIYVUWcU6ScApbhLhVrQTX8XqrMrow==}
@@ -1281,7 +1281,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@clavis.nexus/collatio@1.0.2': {}
+  '@clavis.nexus/collatio@1.0.3': {}
 
   '@csstools/color-helpers@6.1.2': {}
 
