@@ -35,6 +35,7 @@ jobs:
         run: node .github/public-surface.mjs
       # Reads the lockfile only (pnpm ls --lockfile-only), before any dependency is downloaded
       - run: node scripts/audit-min-release-age.mjs
+      # High and critical advisories; one with no fixed release passes only through scripts/audit-exceptions.json (README)
       - run: pnpm run audit:security
       # The daily run only checks the dependencies again
       - if: github.event_name != 'schedule'
@@ -46,3 +47,5 @@ jobs:
         run: pnpm typecheck
       - if: github.event_name != 'schedule'
         run: pnpm test
+      - if: github.event_name != 'schedule'
+        run: pnpm run test:scripts
