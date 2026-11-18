@@ -51,7 +51,7 @@ export type RegisterLinkResult = {
   requestId: string;
   /** Where the user goes to link their account on Connect */
   consumeUrl: string;
-  /** The confirmation code Connect asks the user to enter. Show it on your page, in the session that started the link */
+  /** The confirmation code Connect asks the user to type. Show it on your own page before handing the user over to Connect */
   displayCode: string;
   pending: PendingLink;
 };

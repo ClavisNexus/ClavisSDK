@@ -1,6 +1,6 @@
 # `@clavis.nexus/app-shell`
 
-Browser parts (ESM): the handoff shell, which advances the phases from waiting on signature-request registration through the move to `consume_url`, and the Clavis button, "Sign in with Clavis" and "Link your Clavis account".
+Browser parts (ESM): the handoff shell, which advances the phases from waiting on signature-request registration through the move to `consume_url`, and the Sign in with Clavis button.
 
 Registration on the server is [`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app). Pass your own BFF as `register`. Its return value is `consume_url`. Leave `poll_secret` out of the BFF's JSON.
 
@@ -162,16 +162,15 @@ Layout and phase order are fixed. Colour, corner radius and font can be inherite
 
 `--clavis-handoff-bg`, `--clavis-handoff-surface`, `--clavis-handoff-surface-muted`, `--clavis-handoff-text`, `--clavis-handoff-text-muted`, `--clavis-handoff-text-subtle`, `--clavis-handoff-border`, `--clavis-handoff-brand`, `--clavis-handoff-error`, `--clavis-handoff-radius`, `--clavis-handoff-font`, `--clavis-handoff-mono`.
 
-## Clavis button
+## Sign in with Clavis button
 
-The button that starts Sign in with Clavis, or links the signed-in user's Clavis account, from your page.
+The button that starts Sign in with Clavis from your page.
 
 ```ts
 import { mountClavisButton } from "@clavis.nexus/app-shell";
 import "@clavis.nexus/app-shell/button.css";
 
 mountClavisButton(document.querySelector<HTMLElement>("#clavis-sign-in")!, {
-  kind: "sign-in",
   tone: "primary",
   allowedHosts: ["api.clavis.nexus"],
   async start() {
@@ -183,11 +182,10 @@ mountClavisButton(document.querySelector<HTMLElement>("#clavis-sign-in")!, {
 });
 ```
 
-`start` calls your server and returns the URL to open: the authorization URL from `beginSignIn` for `sign-in`, `consumeUrl` from `registerLink` for `link` ([`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app)). The button calls it when pressed, and not before.
+`start` calls your server and returns the authorization URL from `beginSignIn` ([`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app)). The button calls it when pressed, and not before.
 
 | Option | Values |
 |--------|--------|
-| `kind` | `sign-in`, `link` |
 | `tone` | `primary` (ink fill), `secondary` (sheet with an ink rule) |
 | `theme` | `auto` (default, follows `prefers-color-scheme`), `light`, `dark` |
 | `width` | `content` (default, as wide as the label), `fluid` (fills the column) |
@@ -195,10 +193,9 @@ mountClavisButton(document.querySelector<HTMLElement>("#clavis-sign-in")!, {
 
 Colour, shape (a rectangle, corners 0, 44px high, no shadow), type, wording, the mark and the height are fixed. Put nothing else inside the button.
 
-| `kind` | `en` | `ja` |
-|--------|------|------|
-| `sign-in` | Sign in with Clavis | Clavis でサインイン |
-| `link` | Link your Clavis account | Clavis と連携 |
+| `en` | `ja` |
+|------|------|
+| Sign in with Clavis | Clavis でサインイン |
 
 The page loads nothing from Clavis: no script, frame or image, no cookie, nothing measured. The mark is inline SVG, and the label font comes with `button.css` from your own origin.
 
@@ -215,7 +212,6 @@ When `start` throws, or the URL will not be opened, the button stops waiting and
 
 ```ts
 const handle = mountClavisButton(element, {
-  kind: "link",
   tone: "secondary",
   uiLocales: ["ja"],
   allowedHosts: ["api.clavis.nexus"],
@@ -230,7 +226,7 @@ For a page rendered on the server, write the same markup with `renderClavisButto
 ```ts
 import { renderClavisButtonHtml } from "@clavis.nexus/app-shell";
 
-const html = `<div id="clavis-sign-in">${renderClavisButtonHtml({ kind: "sign-in", tone: "primary", uiLocales: ["ja"] })}</div>`;
+const html = `<div id="clavis-sign-in">${renderClavisButtonHtml({ tone: "primary", uiLocales: ["ja"] })}</div>`;
 ```
 
 `CLAVIS_BUTTON_TEXT` holds the wording for each language.

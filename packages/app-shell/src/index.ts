@@ -2,7 +2,6 @@ export { openHandoffShell } from "./shell.js";
 export { mountClavisButton, renderClavisButtonHtml } from "./button.js";
 export type {
   ClavisButtonHandle,
-  ClavisButtonKind,
   ClavisButtonOptions,
   ClavisButtonTheme,
   ClavisButtonTone,

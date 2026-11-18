@@ -37,12 +37,12 @@ OUT = PACKAGE / "src" / "clavis-button-grotesk.woff2"
 RECORD = PACKAGE / "src" / "clavis-button-grotesk.json"
 WEIGHT = 600
 
-LABEL = re.compile(r'label: \{ "sign-in": "([^"]*)", link: "([^"]*)" \}')
+LABEL = re.compile(r'^\s*label: "([^"]*)",$', re.M)
 
 
 def label_chars() -> str:
-    labels = [s for pair in LABEL.findall(TEXT.read_text("utf-8")) for s in pair]
-    if len(labels) < 4:
+    labels = LABEL.findall(TEXT.read_text("utf-8"))
+    if len(labels) < 2:
         raise SystemExit("the button labels were not found in src/text.ts")
     # 和文は端末の書体で描く。この字が受け持つのは ASCII だけ
     return "".join(sorted({c for s in labels for c in s if " " <= c <= "~"}))

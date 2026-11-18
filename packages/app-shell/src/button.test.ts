@@ -8,7 +8,6 @@ import {
   ClavisButtonError,
   mountClavisButton,
   renderClavisButtonHtml,
-  type ClavisButtonKind,
   type ClavisButtonTheme,
   type ClavisButtonTone,
   type MountClavisButtonOptions,
@@ -29,7 +28,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const KINDS: ClavisButtonKind[] = ["sign-in", "link"];
 const TONES: ClavisButtonTone[] = ["primary", "secondary"];
 const THEMES: ClavisButtonTheme[] = ["light", "dark", "auto"];
 const LANGS = ["ja", "en"] as const;
@@ -54,7 +52,7 @@ function mount(over: Partial<MountClavisButtonOptions> = {}) {
   const el = host();
   const assign = vi.fn();
   const start = vi.fn(async () => "https://api.clavis.nexus/oauth/authorize?client_id=app");
-  const handle = mountClavisButton(el, { kind: "sign-in", tone: "primary", uiLocales: ["ja"], allowedHosts: ["api.clavis.nexus"], start, assign, ...over });
+  const handle = mountClavisButton(el, { tone: "primary", uiLocales: ["ja"], allowedHosts: ["api.clavis.nexus"], start, assign, ...over });
   const note = () => el.querySelector(".clavis-button-note")!.textContent;
   return { el, handle, assign, start, note };
 }
@@ -64,62 +62,60 @@ function stubBrowserLanguages(languages: string[]): void {
 }
 
 describe("renderClavisButtonHtml", () => {
-  it("draws every kind, tone, theme and language with its own wording", () => {
-    for (const kind of KINDS) {
-      for (const tone of TONES) {
-        for (const theme of THEMES) {
-          for (const lang of LANGS) {
-            const el = host();
-            el.innerHTML = renderClavisButtonHtml({ kind, tone, theme, uiLocales: [lang] });
-            const root = el.querySelector<HTMLElement>(".clavis-button-root")!;
-            const button = root.querySelector("button")!;
-            expect(root.dataset).toMatchObject({ theme, width: "content" });
-            expect(root.lang).toBe(lang);
-            expect(button.type).toBe("button");
-            expect(button.dataset).toMatchObject({ kind, tone });
-            expect(button.textContent).toBe(CLAVIS_BUTTON_TEXT[lang].label[kind]);
-            expect(root.querySelectorAll(".clavis-button-mark path")).toHaveLength(MARK_PATHS.length);
-            expect(root.querySelector(".clavis-button-mark")!.getAttribute("aria-hidden")).toBe("true");
-            expect(root.querySelector(".clavis-button-note")!.textContent).toBe("");
-            el.remove();
-          }
+  it("draws every tone, theme and language with its own wording", () => {
+    for (const tone of TONES) {
+      for (const theme of THEMES) {
+        for (const lang of LANGS) {
+          const el = host();
+          el.innerHTML = renderClavisButtonHtml({ tone, theme, uiLocales: [lang] });
+          const root = el.querySelector<HTMLElement>(".clavis-button-root")!;
+          const button = root.querySelector("button")!;
+          expect(root.dataset).toMatchObject({ theme, width: "content" });
+          expect(root.lang).toBe(lang);
+          expect(button.type).toBe("button");
+          expect({ ...button.dataset }).toEqual({ tone });
+          expect(button.textContent).toBe(CLAVIS_BUTTON_TEXT[lang].label);
+          expect(root.querySelectorAll(".clavis-button-mark path")).toHaveLength(MARK_PATHS.length);
+          expect(root.querySelector(".clavis-button-mark")!.getAttribute("aria-hidden")).toBe("true");
+          expect(root.querySelector(".clavis-button-note")!.textContent).toBe("");
+          el.remove();
         }
       }
     }
   });
 
-  it("writes the labels for each language", () => {
-    expect(CLAVIS_BUTTON_TEXT.ja.label).toEqual({ "sign-in": "Clavis でサインイン", link: "Clavis と連携" });
-    expect(CLAVIS_BUTTON_TEXT.en.label).toEqual({ "sign-in": "Sign in with Clavis", link: "Link your Clavis account" });
+  it("writes the label for each language", () => {
+    expect(CLAVIS_BUTTON_TEXT.ja.label).toBe("Clavis でサインイン");
+    expect(CLAVIS_BUTTON_TEXT.en.label).toBe("Sign in with Clavis");
   });
 
   it("defaults to auto and the label's width, and fills the column when fluid", () => {
-    const html = renderClavisButtonHtml({ kind: "link", tone: "secondary", uiLocales: ["en-GB"] });
+    const html = renderClavisButtonHtml({ tone: "secondary", uiLocales: ["en-GB"] });
     expect(html).toContain('data-theme="auto"');
     expect(html).toContain('data-width="content"');
     expect(html).toContain('lang="en"');
-    expect(renderClavisButtonHtml({ kind: "link", tone: "secondary", width: "fluid" })).toContain('data-width="fluid"');
+    expect(renderClavisButtonHtml({ tone: "secondary", width: "fluid" })).toContain('data-width="fluid"');
   });
 
   it("follows the browser's languages, then en", () => {
     stubBrowserLanguages(["fr-FR", "ja-JP"]);
-    expect(renderClavisButtonHtml({ kind: "sign-in", tone: "primary" })).toContain(">Clavis でサインイン<");
-    expect(renderClavisButtonHtml({ kind: "sign-in", tone: "primary", uiLocales: ["de"] })).toContain(">Clavis でサインイン<");
+    expect(renderClavisButtonHtml({ tone: "primary" })).toContain(">Clavis でサインイン<");
+    expect(renderClavisButtonHtml({ tone: "primary", uiLocales: ["de"] })).toContain(">Clavis でサインイン<");
     stubBrowserLanguages(["fr-FR"]);
-    expect(renderClavisButtonHtml({ kind: "sign-in", tone: "primary" })).toContain(">Sign in with Clavis<");
+    expect(renderClavisButtonHtml({ tone: "primary" })).toContain(">Sign in with Clavis<");
   });
 
   it("carries no script, frame, image, style attribute or address", () => {
-    const html = renderClavisButtonHtml({ kind: "sign-in", tone: "primary", theme: "dark", uiLocales: ["ja"] });
+    const html = renderClavisButtonHtml({ tone: "primary", theme: "dark", uiLocales: ["ja"] });
     expect(html).not.toMatch(/<(script|iframe|img|link|object|embed|image|use)\b/i);
     expect(html).not.toMatch(/\b(src|href|srcset|style|on\w+)=/i);
     expect(html).not.toMatch(/https?:|\/\//);
   });
 
   it("refuses options the button does not offer", () => {
-    expect(() => renderClavisButtonHtml({ kind: "login" as ClavisButtonKind, tone: "primary" })).toThrow(TypeError);
-    expect(() => renderClavisButtonHtml({ kind: "sign-in", tone: "ghost" as ClavisButtonTone })).toThrow(TypeError);
-    expect(() => renderClavisButtonHtml({ kind: "sign-in", tone: "primary", theme: "sepia" as ClavisButtonTheme })).toThrow(TypeError);
+    expect(() => renderClavisButtonHtml({ tone: "ghost" as ClavisButtonTone })).toThrow(TypeError);
+    expect(() => renderClavisButtonHtml({ tone: "primary", theme: "sepia" as ClavisButtonTheme })).toThrow(TypeError);
+    expect(() => renderClavisButtonHtml({ tone: "primary", width: "wide" as "fluid" })).toThrow(TypeError);
   });
 });
 
@@ -128,8 +124,8 @@ describe("mountClavisButton", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     const cookie = document.cookie;
-    const { el, start } = mount({ kind: "link", tone: "secondary", theme: "light", width: "fluid", uiLocales: ["en"] });
-    expect(el.innerHTML).toBe(renderClavisButtonHtml({ kind: "link", tone: "secondary", theme: "light", width: "fluid", uiLocales: ["en"] }));
+    const { el, start } = mount({ tone: "secondary", theme: "light", width: "fluid", uiLocales: ["en"] });
+    expect(el.innerHTML).toBe(renderClavisButtonHtml({ tone: "secondary", theme: "light", width: "fluid", uiLocales: ["en"] }));
     expect(start).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(document.cookie).toBe(cookie);
@@ -138,8 +134,8 @@ describe("mountClavisButton", () => {
 
   it("replaces markup rendered on the server", () => {
     const el = host();
-    el.innerHTML = renderClavisButtonHtml({ kind: "sign-in", tone: "primary", uiLocales: ["ja"] });
-    mountClavisButton(el, { kind: "sign-in", tone: "primary", uiLocales: ["ja"], allowedHosts: ["api.clavis.nexus"], start: async () => "", assign: () => {} });
+    el.innerHTML = renderClavisButtonHtml({ tone: "primary", uiLocales: ["ja"] });
+    mountClavisButton(el, { tone: "primary", uiLocales: ["ja"], allowedHosts: ["api.clavis.nexus"], start: async () => "", assign: () => {} });
     expect(el.querySelectorAll(".clavis-button-root")).toHaveLength(1);
   });
 
@@ -175,7 +171,7 @@ describe("mountClavisButton", () => {
       if (code) {
         await expect(handle.press()).rejects.toMatchObject({ name: "ClavisButtonError", code });
         expect(assign).not.toHaveBeenCalled();
-        expect(note()).toBe(CLAVIS_BUTTON_TEXT.en.blocked["sign-in"]);
+        expect(note()).toBe(CLAVIS_BUTTON_TEXT.en.blocked);
         expect(handle.button.hasAttribute("aria-busy")).toBe(false);
       } else {
         await handle.press();
@@ -188,30 +184,28 @@ describe("mountClavisButton", () => {
   it("shows one line in the viewer's language when start fails, and rejects with the reason", async () => {
     const reason = new Error("HTTP 503 from /auth/clavis/start");
     for (const lang of LANGS) {
-      for (const kind of KINDS) {
-        const onError = vi.fn();
-        const { handle, note, assign } = mount({ kind, uiLocales: [lang], start: async () => Promise.reject(reason), onError });
-        await expect(handle.press()).rejects.toBe(reason);
-        expect(note()).toBe(CLAVIS_BUTTON_TEXT[lang].retry[kind]);
-        expect(note()).not.toContain("503");
-        expect(handle.button.hasAttribute("aria-busy")).toBe(false);
-        expect(assign).not.toHaveBeenCalled();
-        handle.unmount();
-      }
+      const onError = vi.fn();
+      const { handle, note, assign } = mount({ uiLocales: [lang], start: async () => Promise.reject(reason), onError });
+      await expect(handle.press()).rejects.toBe(reason);
+      expect(note()).toBe(CLAVIS_BUTTON_TEXT[lang].retry);
+      expect(note()).not.toContain("503");
+      expect(handle.button.hasAttribute("aria-busy")).toBe(false);
+      expect(assign).not.toHaveBeenCalled();
+      handle.unmount();
     }
   });
 
   it("hands a failed click to onError, and lets the next press try again with the line cleared", async () => {
     const reason = new Error("offline");
-    const start = vi.fn<() => Promise<string>>().mockRejectedValueOnce(reason).mockResolvedValueOnce("https://api.clavis.nexus/consume-link/r");
+    const start = vi.fn<() => Promise<string>>().mockRejectedValueOnce(reason).mockResolvedValueOnce("https://api.clavis.nexus/oauth/authorize?state=s2");
     const onError = vi.fn();
-    const { handle, note, assign } = mount({ kind: "link", start, onError });
+    const { handle, note, assign } = mount({ start, onError });
     handle.button.click();
     await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(reason));
-    expect(note()).toBe(CLAVIS_BUTTON_TEXT.ja.retry.link);
+    expect(note()).toBe(CLAVIS_BUTTON_TEXT.ja.retry);
     handle.button.click();
     expect(note()).toBe("");
-    await vi.waitFor(() => expect(assign).toHaveBeenCalledWith("https://api.clavis.nexus/consume-link/r"));
+    await vi.waitFor(() => expect(assign).toHaveBeenCalledWith("https://api.clavis.nexus/oauth/authorize?state=s2"));
     expect(start).toHaveBeenCalledTimes(2);
   });
 
@@ -239,7 +233,7 @@ describe("mountClavisButton", () => {
       },
     });
     await expect(handle.press()).rejects.toThrow("navigation blocked");
-    expect(note()).toBe(CLAVIS_BUTTON_TEXT.en.blocked["sign-in"]);
+    expect(note()).toBe(CLAVIS_BUTTON_TEXT.en.blocked);
   });
 
   it("stops waiting when the page comes back from the back-forward cache", async () => {
@@ -263,8 +257,8 @@ describe("mountClavisButton", () => {
 
   it("needs start and allowedHosts", () => {
     const el = host();
-    expect(() => mountClavisButton(el, { kind: "sign-in", tone: "primary" } as MountClavisButtonOptions)).toThrow(TypeError);
-    expect(() => mountClavisButton(el, { kind: "sign-in", tone: "primary", start: async () => "" } as unknown as MountClavisButtonOptions)).toThrow(TypeError);
+    expect(() => mountClavisButton(el, { tone: "primary" } as MountClavisButtonOptions)).toThrow(TypeError);
+    expect(() => mountClavisButton(el, { tone: "primary", start: async () => "" } as unknown as MountClavisButtonOptions)).toThrow(TypeError);
   });
 
   it("exports the error class", () => {
@@ -295,7 +289,7 @@ describe("button.css", () => {
     expect(css).toContain(`unicode-range: ${fontRecord.unicodeRange};`);
     const latin = new Set(
       Object.values(CLAVIS_BUTTON_TEXT)
-        .flatMap((t) => Object.values(t.label))
+        .map((t) => t.label)
         .join("")
         .split("")
         .filter((c) => c >= " " && c <= "~"),

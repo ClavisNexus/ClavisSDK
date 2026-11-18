@@ -1,6 +1,6 @@
 # `@clavis.nexus/app`
 
-Server SDK for Node 24 and later (ESM). The browser parts, the handoff shell and the Clavis button, are [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
+Server SDK for Node 24 and later (ESM). The browser parts, the handoff shell and the Sign in with Clavis button, are [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
 
 Pass a SHA-256 digest as Base64URL (43 characters) in `messageDigest`. The caller prepares that string. The user signs the statement `app.sign@1`, which Clavis builds from it, with a passkey. Store the registration response's `pollSecret` on your server, and read completion with `getStatus` or `waitForCompletion`. A completion carries an app receipt (`receipt.app@1`).
 
@@ -311,9 +311,10 @@ async function startLink(localUserId: string, keep: (pending: PendingLink) => Pr
   const { consumeUrl, displayCode, pending } = await app.registerLink({
     appUser: localUserId,
     returnUrl: "https://console.example/settings/clavis",
+    ttlSeconds: 300,
   });
   await keep(pending);
-  return Response.json({ url: consumeUrl, display_code: displayCode });
+  return Response.json({ consume_url: consumeUrl, display_code: displayCode });
 }
 
 // When the user comes back to returnUrl, or on the webhook ping
@@ -323,7 +324,22 @@ async function linked(take: () => Promise<PendingLink>) {
 }
 ```
 
-The user signs `federation.link@1 { app, app_user, nonce, iss }` with a passkey on Connect. `appUser` is your own ID for the user, normalised to NFC with the ends trimmed (at most 128 characters, no control characters). The SDK makes the nonce and names the issuer. Connect's link page asks the user for `displayCode`: show it to the user in the session that started the link. Pass `allowedSub` when you already know the user's ID in this app.
+In the browser, show `display_code` on your own page first, then hand over to Connect with the handoff shell when the user continues. Connect asks the user to type the code before they sign.
+
+```ts
+import { openHandoffShell } from "@clavis.nexus/app-shell";
+import "@clavis.nexus/app-shell/styles.css";
+
+const res = await fetch("/api/clavis/link", { method: "POST", credentials: "same-origin" });
+const { consume_url, display_code } = (await res.json()) as { consume_url: string; display_code: string };
+showConfirmationCode(display_code); // your page: the code, and a button to continue to Clavis
+
+async function continueToClavis() {
+  await openHandoffShell({ allowedConsumeHosts: ["api.clavis.nexus"], register: async () => consume_url });
+}
+```
+
+The user signs `federation.link@1 { app, app_user, nonce, iss }` with a passkey on Connect. `appUser` is your own ID for the user, normalised to NFC with the ends trimmed (at most 128 characters, no control characters). The SDK makes the nonce and names the issuer. The request lives for `ttlSeconds` (120 seconds by default), so the user has to reach Connect within it. Pass `allowedSub` when you already know the user's ID in this app.
 
 `completeLink` reads status with the poll secret in `pending`. Before the user has signed, it is `link_pending`. The verifier checks the app receipt, and the SDK checks that it binds `appUser`, the nonce and the issuer you asked for. Clavis keeps no table of links: the mapping is yours to keep.
 

@@ -5,7 +5,7 @@ Clavis App 向けの公開 npm パッケージ。ライセンスは MIT。
 | ディレクトリ | npm 名 | 役割 |
 |---|---|---|
 | `packages/app` | `@clavis.nexus/app` | サーバ SDK。Clavis でのサインインと連携、署名依頼の登録、status、webhook ping、台帳への記録と証拠束。受領・委任の記録・証拠束は照合器 Collatio で確かめる |
-| `packages/app-shell` | `@clavis.nexus/app-shell` | ブラウザの部品。準備オーバーレイ（Connect へ渡すまで）と、Clavis のボタン（サインイン・連携） |
+| `packages/app-shell` | `@clavis.nexus/app-shell` | ブラウザの部品。準備オーバーレイ（Connect へ渡すまで）と、Clavis でサインインのボタン |
 | `packages/setup` | `@clavis.nexus/setup` | developers 向けセットアップ CLI／MCP（Passkey と同意は人間） |
 
 手順の正本は [docs.clavis.nexus](https://docs.clavis.nexus)。`message_digest` の計算はこのリポジトリの対象外。登録には、呼び出し側が用意した digest 文字列を渡す。

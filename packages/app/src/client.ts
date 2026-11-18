@@ -441,8 +441,9 @@ export type AppClient = {
   /** The user's role in the Org that owns this app, read with the access token of a sign-in that asked for `org.role` */
   orgMembership: (accessToken: string, options?: SignInCallOptions) => Promise<OrgMembership>;
   /**
-   * Register a request to link the signed-in user's Clavis account (`federation.link`). Show
-   * `displayCode` to the user, send them to `consumeUrl`, and keep `pending` on your server.
+   * Register a request to link the signed-in user's Clavis account (`federation.link`). Keep
+   * `pending` on your server, show `displayCode` on your own page (Connect asks the user to type it),
+   * then send the user to `consumeUrl`.
    */
   registerLink: (input: RegisterLinkInput) => Promise<RegisterLinkResult>;
   /**

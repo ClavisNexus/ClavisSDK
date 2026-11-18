@@ -3,8 +3,6 @@ import { MARK_PATHS, MARK_VIEWBOX } from "./mark.generated.js";
 import { checkNavigationUrl, type NavigationRefusal } from "./navigation.js";
 import { CLAVIS_BUTTON_TEXT, resolveLocale, type ClavisButtonText, type HandoffLocale } from "./text.js";
 
-/** `sign-in` starts Sign in with Clavis; `link` starts linking the signed-in user's Clavis account */
-export type ClavisButtonKind = "sign-in" | "link";
 /** `primary` is an ink fill; `secondary` is the sheet with an ink rule */
 export type ClavisButtonTone = "primary" | "secondary";
 /** `auto` follows `prefers-color-scheme` */
@@ -14,7 +12,6 @@ export type ClavisButtonWidth = "content" | "fluid";
 
 /** What the business chooses. Colour, shape, corners, type, wording, mark and height are fixed */
 export type ClavisButtonOptions = {
-  kind: ClavisButtonKind;
   tone: ClavisButtonTone;
   /** Default `auto` */
   theme?: ClavisButtonTheme;
@@ -35,8 +32,7 @@ export type MountClavisButtonOptions = ClavisButtonOptions & {
   allowedHosts: readonly string[];
   /**
    * Called when the button is pressed, and not before. Call your own server and return the URL to
-   * open: the authorization URL for `sign-in` (from `beginSignIn`), `consumeUrl` for `link` (from
-   * `registerLink`).
+   * open: the authorization URL from `beginSignIn`.
    */
   start: () => Promise<string>;
   /** Defaults to `window.location.assign` */
@@ -55,7 +51,6 @@ export type ClavisButtonHandle = {
 
 type Node = { tag: string; svg?: boolean; attrs: Array<[string, string]>; children: Array<Node | string> };
 
-const KINDS: readonly ClavisButtonKind[] = ["sign-in", "link"];
 const TONES: readonly ClavisButtonTone[] = ["primary", "secondary"];
 const THEMES: readonly ClavisButtonTheme[] = ["light", "dark", "auto"];
 const WIDTHS: readonly ClavisButtonWidth[] = ["content", "fluid"];
@@ -66,13 +61,12 @@ function pick<T extends string>(value: T | undefined, allowed: readonly T[], fal
   return v;
 }
 
-type Resolved = { kind: ClavisButtonKind; tone: ClavisButtonTone; theme: ClavisButtonTheme; width: ClavisButtonWidth; locale: HandoffLocale; text: ClavisButtonText };
+type Resolved = { tone: ClavisButtonTone; theme: ClavisButtonTheme; width: ClavisButtonWidth; locale: HandoffLocale; text: ClavisButtonText };
 
 function resolve(options: ClavisButtonOptions): Resolved {
   if (!options || typeof options !== "object") throw new TypeError("options required");
   const locale = resolveLocale(options.uiLocales);
   return {
-    kind: pick(options.kind, KINDS, undefined, "kind"),
     tone: pick(options.tone, TONES, undefined, "tone"),
     theme: pick(options.theme, THEMES, "auto", "theme"),
     width: pick(options.width, WIDTHS, "content", "width"),
@@ -118,10 +112,9 @@ function tree(r: Resolved): Node {
         attrs: [
           ["type", "button"],
           ["class", "clavis-button"],
-          ["data-kind", r.kind],
           ["data-tone", r.tone],
         ],
-        children: [mark, { tag: "span", attrs: [["class", "clavis-button-label"]], children: [r.text.label[r.kind]] }],
+        children: [mark, { tag: "span", attrs: [["class", "clavis-button-label"]], children: [r.text.label] }],
       },
       { tag: "span", attrs: [["class", "clavis-button-note"], ["role", "status"]], children: [] },
     ],
@@ -166,7 +159,7 @@ const START_URL_REFUSALS: Record<NavigationRefusal, [ClavisButtonErrorCode, (hos
 const asError = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 
 /**
- * Put the Clavis button in `element` (its content is replaced, so markup from
+ * Put the Sign in with Clavis button in `element` (its content is replaced, so markup from
  * `renderClavisButtonHtml` can stand there until this runs). Nothing is sent before the button is
  * pressed; no cookie is set and nothing is measured.
  *
@@ -209,17 +202,17 @@ export function mountClavisButton(element: HTMLElement, options: MountClavisButt
     try {
       returned = await options.start();
     } catch (e) {
-      stop(r.text.retry[r.kind], asError(e));
+      stop(r.text.retry, asError(e));
     }
     const checked = checkNavigationUrl(returned, options.allowedHosts);
     if (!checked.ok) {
       const [code, message] = START_URL_REFUSALS[checked.refusal];
-      stop(r.text.blocked[r.kind], new ClavisButtonError(code, message(checked.host), { host: checked.host, cause: checked.cause }));
+      stop(r.text.blocked, new ClavisButtonError(code, message(checked.host), { host: checked.host, cause: checked.cause }));
     }
     try {
       assign(checked.url);
     } catch (e) {
-      stop(r.text.blocked[r.kind], asError(e));
+      stop(r.text.blocked, asError(e));
     }
     // The button keeps waiting until the page goes; a page restored from the back-forward cache resets it
   }
