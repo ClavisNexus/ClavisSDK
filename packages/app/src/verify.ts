@@ -181,7 +181,29 @@ function normalizeApiOrigin(raw: string): string {
   return u.origin;
 }
 
+/** A key of the aggregate JWKS whose sealer signature the verifier checked against `trustRoot` */
+export type TrustedKey = { kid: string; slot: string; alg: string; jwk: JsonWebKey };
+
+/** The verifier, and the keys of the aggregate JWKS it checked. The SDK reads the session key (`wauthn-auth-jwt`) for sign-in from here */
+export type VerifierWithKeys = {
+  verifier: Verifier;
+  /** The key `kid` in slot `slot`, from the aggregate JWKS that chains to `trustRoot`. A kid the copy in hand lacks fetches the JWKS once more (at most once a minute); still missing, null */
+  trustedKey: (kid: string, slot: string) => Promise<TrustedKey | null>;
+};
+
 export function createVerifier(opts: CreateVerifierOptions): Verifier {
+  return createVerifierWithKeys(opts).verifier;
+}
+
+/** Read the public members of one JWKS key the verifier listed. The verifier refused any key with other members */
+function publicJwk(member: unknown): JsonWebKey | null {
+  const r = member !== null && typeof member === "object" && !Array.isArray(member) ? (member as Record<string, unknown>) : null;
+  if (!r || typeof r.kty !== "string" || typeof r.crv !== "string" || typeof r.x !== "string") return null;
+  if (r.kty === "EC") return typeof r.y === "string" ? { kty: "EC", crv: r.crv, x: r.x, y: r.y } : null;
+  return { kty: r.kty, crv: r.crv, x: r.x };
+}
+
+export function createVerifierWithKeys(opts: CreateVerifierOptions): VerifierWithKeys {
   if ("masterPublicJwkJson" in (opts as Record<string, unknown>)) {
     // The 2.x masterPublicJwkJson is a different key: never read it as trustRoot
     throw new AppClientError("removed_option", "masterPublicJwkJson was removed in 3.0; pass the Master public JWK as trustRoot");
@@ -369,5 +391,47 @@ export function createVerifier(opts: CreateVerifierOptions): Verifier {
     };
   }
 
-  return { trust, verifyReceipt, verifyMandateRecord, verifyMandateHistory, verifyLedgerBundle, verifyLedgerNote };
+  /** The keys of the aggregate JWKS in hand, checked once per copy of the JWKS */
+  let checkedKeys: { jwks: string; keys: TrustedKey[] } | null = null;
+
+  async function keysInHand(): Promise<TrustedKey[]> {
+    let trust: CollatioTrust;
+    try {
+      trust = await surface.trust();
+    } catch (e) {
+      if (e instanceof AppClientError) throw e;
+      throw new AppClientError("trust_unavailable", "the trust documents could not be read", undefined, { cause: e });
+    }
+    if (checkedKeys?.jwks === trust.jwks) return checkedKeys.keys;
+    const answer = await host.call({ op: "trust", now: now(), trust });
+    if (!answer.ok) {
+      throw new AppClientError("invalid_trust_root", `the trust documents do not chain to trustRoot (${answer.reason})`, undefined, {
+        verifierReason: answer.reason,
+      });
+    }
+    // The verifier read this same string with a reader that refuses repeated keys, so JSON.parse reads the members it checked
+    const members = (JSON.parse(trust.jwks) as { keys?: unknown }).keys;
+    const keys: TrustedKey[] = [];
+    for (const listed of answer.keys as { kid: string; slot: string; alg: string }[]) {
+      const member = Array.isArray(members) ? members.find((m) => (m as { kid?: unknown } | null)?.kid === listed.kid) : undefined;
+      const jwk = publicJwk(member);
+      if (jwk) keys.push({ kid: listed.kid, slot: listed.slot, alg: listed.alg, jwk });
+    }
+    checkedKeys = { jwks: trust.jwks, keys };
+    return keys;
+  }
+
+  async function trustedKey(kid: string, slot: string): Promise<TrustedKey | null> {
+    const found = (await keysInHand()).find((k) => k.kid === kid && k.slot === slot) ?? null;
+    if (found || Date.now() - refreshedAt <= 60_000) return found;
+    // A kid the copy in hand lacks may be a key added since: fetch once more
+    refreshedAt = Date.now();
+    surface.invalidate();
+    return (await keysInHand()).find((k) => k.kid === kid && k.slot === slot) ?? null;
+  }
+
+  return {
+    verifier: { trust, verifyReceipt, verifyMandateRecord, verifyMandateHistory, verifyLedgerBundle, verifyLedgerNote },
+    trustedKey,
+  };
 }

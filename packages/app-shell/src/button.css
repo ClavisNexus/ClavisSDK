@@ -1,0 +1,222 @@
+/* @clavis.nexus/app-shell — the Clavis button (Sign in with Clavis / Link your Clavis account) */
+
+/*
+ * The label's Latin letters: Familjen Grotesk 600 (SIL OFL 1.1, OFL.txt), cut down to the letters of
+ * the labels. Served from the page's own origin with this stylesheet; nothing is fetched from Clavis.
+ */
+@font-face {
+  font-family: "Clavis Button Grotesk";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./clavis-button-grotesk.woff2") format("woff2");
+  unicode-range: U+20, U+43, U+4C, U+53, U+61, U+63, U+67-69, U+6B-6C, U+6E-6F, U+72-77, U+79;
+}
+
+.clavis-button-root {
+  /* Ink on paper. The values are fixed: the same mark leads to the same entry on every page */
+  --clavis-button-ink: #191512;
+  --clavis-button-sheet: #fefdfa;
+  --clavis-button-wet: #3356a6;
+  --clavis-button-rust: #9b411a;
+  --clavis-button-font-latin: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --clavis-button-font-ja: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", Meiryo, "Noto Sans JP",
+    sans-serif;
+  --clavis-button-font-system: var(--clavis-button-font-latin);
+
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-inline-size: 100%;
+  vertical-align: middle;
+}
+
+.clavis-button-root:lang(ja) {
+  --clavis-button-font-system: var(--clavis-button-font-ja);
+}
+
+/* Night: the values of the ink island */
+.clavis-button-root[data-theme="dark"] {
+  --clavis-button-ink: #edebe7;
+  --clavis-button-sheet: #171412;
+  --clavis-button-wet: #8baaeb;
+  --clavis-button-rust: #e28b63;
+}
+
+@media (prefers-color-scheme: dark) {
+  .clavis-button-root[data-theme="auto"] {
+    --clavis-button-ink: #edebe7;
+    --clavis-button-sheet: #171412;
+    --clavis-button-wet: #8baaeb;
+    --clavis-button-rust: #e28b63;
+  }
+}
+
+.clavis-button-root[data-width="fluid"] {
+  display: flex;
+  align-items: stretch;
+  inline-size: 100%;
+}
+
+/* A rectangle: corners 0, 44px high, no shadow. Only the colour moves on hover */
+.clavis-button {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  block-size: 44px;
+  min-block-size: 44px;
+  max-inline-size: 100%;
+  margin: 0;
+  padding: 0 16px;
+  border: 1px solid var(--clavis-button-ink);
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--clavis-button-ink);
+  color: var(--clavis-button-sheet);
+  font-family: "Clavis Button Grotesk", var(--clavis-button-font-system);
+  font-size: 15px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: normal;
+  text-align: center;
+  text-decoration: none;
+  text-transform: none;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.clavis-button[data-tone="secondary"] {
+  background: var(--clavis-button-sheet);
+  color: var(--clavis-button-ink);
+}
+
+.clavis-button:not([aria-busy="true"]):hover {
+  background: var(--clavis-button-sheet);
+  color: var(--clavis-button-ink);
+}
+
+.clavis-button[data-tone="secondary"]:not([aria-busy="true"]):hover {
+  background: var(--clavis-button-ink);
+  color: var(--clavis-button-sheet);
+}
+
+.clavis-button:focus-visible {
+  outline: 2px solid var(--clavis-button-wet);
+  outline-offset: 2px;
+}
+
+.clavis-button[aria-busy="true"] {
+  cursor: progress;
+}
+
+.clavis-button-root[data-width="fluid"] .clavis-button {
+  inline-size: 100%;
+}
+
+.clavis-button-label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The mark (the seal of Clavis's promise), pip level, in the text colour */
+.clavis-button-mark {
+  display: block;
+  flex: none;
+  inline-size: 24px;
+  block-size: 24px;
+  overflow: visible;
+}
+
+.clavis-button-mark path {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+}
+
+/*
+ * Waiting: from the press until the page goes, the mark is carved and lifted again, line by line.
+ * No ring that keeps turning. Lines are 1.25 times as thick, so they read at this size.
+ */
+.clavis-button[aria-busy="true"] .clavis-button-mark path {
+  stroke-dasharray: 1 1;
+  stroke-dashoffset: 1;
+  animation: clavis-button-wait 2400ms cubic-bezier(0.7, 0, 0.2, 1) infinite;
+}
+
+.clavis-button[aria-busy="true"] .clavis-button-mark path[data-kind="ring"] {
+  stroke-width: 75.84;
+}
+
+.clavis-button[aria-busy="true"] .clavis-button-mark path[data-kind="line"] {
+  stroke-width: 59.59;
+}
+
+.clavis-button[aria-busy="true"] .clavis-button-mark path[data-i="1"] {
+  animation-delay: 140ms;
+}
+
+@keyframes clavis-button-wait {
+  0% {
+    stroke-dashoffset: 1;
+  }
+  42%,
+  58% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -1;
+  }
+}
+
+/* The line under the button after a press that failed: a broken ring and one sentence, in rust */
+.clavis-button-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6em;
+  margin: 8px 0 0;
+  max-inline-size: 100%;
+  color: var(--clavis-button-rust);
+  font-family: var(--clavis-button-font-system);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.clavis-button-note::before {
+  content: "";
+  flex: none;
+  inline-size: 11px;
+  block-size: 11px;
+  margin-block-start: calc((1.6em - 11px) / 2);
+  border: 1.5px dashed currentColor;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.clavis-button-note:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clavis-button {
+    transition: none;
+  }
+
+  /* Waiting shows the carved mark, still */
+  .clavis-button[aria-busy="true"] .clavis-button-mark path {
+    animation: none;
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+}

@@ -47,7 +47,20 @@ export type AppClientErrorCode =
   | "mandate_failed"
   | "invalid_mandate_record"
   | "invalid_on_behalf"
-  | "on_behalf_mismatch";
+  | "on_behalf_mismatch"
+  | "declined"
+  | "unavailable"
+  | "invalid_sign_in_args"
+  | "state_mismatch"
+  | "invalid_callback"
+  | "invalid_token_response"
+  | "id_token_invalid"
+  | "revoke_failed"
+  | "org_membership_failed"
+  | "invalid_org_membership"
+  | "invalid_app_user"
+  | "link_pending"
+  | "link_mismatch";
 
 export type AppClientErrorDetails = {
   /** The `error` in the API response body, for example `RETURN_URL_NOT_ALLOWED`. */

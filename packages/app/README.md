@@ -1,6 +1,6 @@
 # `@clavis.nexus/app`
 
-Server SDK for Node 24 and later (ESM). The browser handoff shell is [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
+Server SDK for Node 24 and later (ESM). The browser parts, the handoff shell and the Clavis button, are [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
 
 Pass a SHA-256 digest as Base64URL (43 characters) in `messageDigest`. The caller prepares that string. The user signs the statement `app.sign@1`, which Clavis builds from it, with a passkey. Store the registration response's `pollSecret` on your server, and read completion with `getStatus` or `waitForCompletion`. A completion carries an app receipt (`receipt.app@1`).
 
@@ -238,6 +238,95 @@ const app = createAppClient({
 
 `digest` is the digest of that `collatio.wasm`, given in the `@clavis.nexus/collatio` README (`moduleDigest` from `@clavis.nexus/collatio` computes it from the bytes). When the receipt names a verifier the SDK does not hold, Node checks that it is in the catalog, fetches it from the trust surface, checks the hash and uses it. On other runtimes the error is `verifier_unavailable`.
 
+## Sign in with Clavis
+
+Sign the user in on your server, and receive their ID in this app (`sub`) before their first signature.
+
+```ts
+import type { PendingSignIn } from "@clavis.nexus/app";
+
+// Called by the button (@clavis.nexus/app-shell) when the user presses it
+async function startSignIn(keep: (pending: PendingSignIn) => Promise<void>): Promise<Response> {
+  const { url, pending } = await app.beginSignIn({
+    redirectUri: "https://console.example/auth/clavis/callback",
+    scope: ["profile"],
+    uiLocales: ["ja"],
+  });
+  await keep(pending);
+  return Response.json({ url });
+}
+
+// GET /auth/clavis/callback
+async function callback(request: Request, take: () => Promise<PendingSignIn>) {
+  const { iss, sub, name, tokens } = await app.completeSignIn(request.url, await take());
+  // Find or create the account keyed by (iss, sub), and start your own session
+}
+```
+
+`redirectUri` is one of the app's redirect paths in developers, as an https URL under the app's host. `beginSignIn` sends nothing. `pending` holds `state`, `nonce` and the PKCE code verifier. Keep it in your server-side session, not in a URL or in a cookie the browser can read, and delete it once `completeSignIn` has used it. The URL carries only `state`, `nonce` and the code challenge.
+
+`completeSignIn` takes the URL the user came back on, or its query. It checks `state`, exchanges the code with the verifier, and checks the id_token: ES256 under the session key (slot `wauthn-auth-jwt`) of the aggregate JWKS that chains to `trustRoot`, `iss` (`apiOrigin`), `aud` (`appId`, alone), `nonce`, `exp`, `iat` (issued within the last 5 minutes) and `at_hash`.
+
+`sub` is the user's ID in this app. Pass it as `allowedSub` when you register a signature request or a delegation, and only that person can sign. It is the `sub` a completion returns. Key accounts by `iss` and `sub` together.
+
+| `scope` | What you receive |
+|---------|------------------|
+| (always `openid`) | `sub` |
+| `profile` | `name`, when the user set one |
+| `org.role` | The user's role in the Org that owns this app, read with `orgMembership` |
+
+Email and contact details are not passed. When you need them, ask the user after sign-in.
+
+When Clavis sends the user back with a refusal, or refuses the exchange, the error is one of two codes. Show your other ways in for both.
+
+| `code` | When |
+|--------|------|
+| `declined` | The user did not sign in (`access_denied`). Clavis gives no reason |
+| `unavailable` | Sign-in is not open to this app now (`unauthorized_client`), or the code exchange was refused. `status`, `apiError` and `traceId` carry what the token endpoint said |
+
+Keep the tokens on your server.
+
+```ts
+const next = await app.refreshSignIn({ refreshToken, sub });
+// Keep next.tokens.refreshToken: a refresh turns the refresh token over
+
+const membership = await app.orgMembership(tokens.accessToken);
+// { sub, appId, orgId, orgRole: "owner" | "admin" | "member" | null }
+
+await app.revokeSignIn(refreshToken, { tokenTypeHint: "refresh_token" });
+
+const signOut = app.endSessionUrl({ postLogoutRedirectUri: "https://console.example/signed-out", idTokenHint: tokens.idToken });
+```
+
+`refreshSignIn` checks the new id_token as above and that it names the same `sub`. A refused refresh (the user revoked the app from their Clavis account, or the session ended) is `unavailable`. Your own session is yours to end. `endSessionUrl` builds the URL that signs the user out of Clavis's sign-in screen; nothing is sent.
+
+## Link your Clavis account
+
+Link the Clavis account of a user already signed in to your app, and receive their ID in this app (`sub`).
+
+```ts
+import type { PendingLink } from "@clavis.nexus/app";
+
+async function startLink(localUserId: string, keep: (pending: PendingLink) => Promise<void>): Promise<Response> {
+  const { consumeUrl, displayCode, pending } = await app.registerLink({
+    appUser: localUserId,
+    returnUrl: "https://console.example/settings/clavis",
+  });
+  await keep(pending);
+  return Response.json({ url: consumeUrl, display_code: displayCode });
+}
+
+// When the user comes back to returnUrl, or on the webhook ping
+async function linked(take: () => Promise<PendingLink>) {
+  const { iss, sub, appUser, receipt } = await app.completeLink(await take());
+  // Store (iss, sub) ↔ appUser, and the receipt
+}
+```
+
+The user signs `federation.link@1 { app, app_user, nonce, iss }` with a passkey on Connect. `appUser` is your own ID for the user, normalised to NFC with the ends trimmed (at most 128 characters, no control characters). The SDK makes the nonce and names the issuer. Connect's link page asks the user for `displayCode`: show it to the user in the session that started the link. Pass `allowedSub` when you already know the user's ID in this app.
+
+`completeLink` reads status with the poll secret in `pending`. Before the user has signed, it is `link_pending`. The verifier checks the app receipt, and the SDK checks that it binds `appUser`, the nonce and the issuer you asked for. Clavis keeps no table of links: the mapping is yours to keep.
+
 ## Errors
 
 Failures are `AppClientError`. It carries `code`, the HTTP `status`, and `apiError` and `traceId` from the API.
@@ -268,6 +357,19 @@ Failures are `AppClientError`. It carries `code`, the HTTP `status`, and `apiErr
 | `invalid_mandate_record` | The verifier refused the record, or the record belongs to another delegation or another request |
 | `invalid_on_behalf` | `onBehalf.domain` is not a domain name. Stopped before sending |
 | `on_behalf_mismatch` | The completion receipt names an organisation other than the one you asked for. A receipt that names an organisation when the request named none is `invalid_status` |
+| `declined` | The user did not sign in (`access_denied` on the return) |
+| `unavailable` | Sign-in is not open to this app now (`unauthorized_client` or another error on the return), or the token endpoint refused the exchange or the refresh |
+| `invalid_sign_in_args` | `redirectUri` is not https, `scope` lists something else, or `pending` is not what `beginSignIn` returned. Stopped before sending |
+| `state_mismatch` | The return does not carry the `state` this sign-in started with. Nothing is sent |
+| `invalid_callback` | The return carries neither `code` nor `error`, or names another issuer |
+| `invalid_token_response` | The token response lacks the tokens |
+| `id_token_invalid` | The id_token failed a check. The message names it (`signature`, `kid`, `iss`, `aud`, `exp`, `iat`, `nonce`, `sub`, `at_hash`) |
+| `revoke_failed` | The revocation endpoint refused |
+| `org_membership_failed` | The Org membership endpoint refused (an expired access token is HTTP 401; a sign-in without `org.role` is 403 `INSUFFICIENT_SCOPE`) |
+| `invalid_org_membership` | The Org membership answer has the wrong shape, or is for another app |
+| `invalid_app_user` | `appUser` is not 1 to 128 characters of text. Stopped before sending |
+| `link_pending` | The link has not been signed yet |
+| `link_mismatch` | The completed receipt is not a link, or binds another user, nonce or issuer |
 | `timeout` | `waitForCompletion` reached its deadline |
 | `ledger_bundle_invalid` | The verifier refused the ledger proof bundle |
 | `network_error` | A fetch failed |

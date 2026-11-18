@@ -1,6 +1,6 @@
 # `@clavis.nexus/app-shell`
 
-Browser handoff shell (ESM). This package advances the phases from waiting on signature-request registration through the move to `consume_url`.
+Browser parts (ESM): the handoff shell, which advances the phases from waiting on signature-request registration through the move to `consume_url`, and the Clavis button, "Sign in with Clavis" and "Link your Clavis account".
 
 Registration on the server is [`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app). Pass your own BFF as `register`. Its return value is `consume_url`. Leave `poll_secret` out of the BFF's JSON.
 
@@ -10,7 +10,7 @@ Registration on the server is [`@clavis.nexus/app`](https://www.npmjs.com/packag
 npm install @clavis.nexus/app-shell
 ```
 
-The CSS is `import "@clavis.nexus/app-shell/styles.css"`.
+The CSS is `import "@clavis.nexus/app-shell/styles.css"` for the handoff shell, and `import "@clavis.nexus/app-shell/button.css"` for the button.
 
 ## Handoff
 
@@ -162,6 +162,81 @@ Layout and phase order are fixed. Colour, corner radius and font can be inherite
 
 `--clavis-handoff-bg`, `--clavis-handoff-surface`, `--clavis-handoff-surface-muted`, `--clavis-handoff-text`, `--clavis-handoff-text-muted`, `--clavis-handoff-text-subtle`, `--clavis-handoff-border`, `--clavis-handoff-brand`, `--clavis-handoff-error`, `--clavis-handoff-radius`, `--clavis-handoff-font`, `--clavis-handoff-mono`.
 
+## Clavis button
+
+The button that starts Sign in with Clavis, or links the signed-in user's Clavis account, from your page.
+
+```ts
+import { mountClavisButton } from "@clavis.nexus/app-shell";
+import "@clavis.nexus/app-shell/button.css";
+
+mountClavisButton(document.querySelector<HTMLElement>("#clavis-sign-in")!, {
+  kind: "sign-in",
+  tone: "primary",
+  allowedHosts: ["api.clavis.nexus"],
+  async start() {
+    const res = await fetch("/auth/clavis/start", { method: "POST", credentials: "same-origin" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as { url: string };
+    return body.url;
+  },
+});
+```
+
+`start` calls your server and returns the URL to open: the authorization URL from `beginSignIn` for `sign-in`, `consumeUrl` from `registerLink` for `link` ([`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app)). The button calls it when pressed, and not before.
+
+| Option | Values |
+|--------|--------|
+| `kind` | `sign-in`, `link` |
+| `tone` | `primary` (ink fill), `secondary` (sheet with an ink rule) |
+| `theme` | `auto` (default, follows `prefers-color-scheme`), `light`, `dark` |
+| `width` | `content` (default, as wide as the label), `fluid` (fills the column) |
+| `uiLocales` | BCP 47 language tags, as in the handoff shell |
+
+Colour, shape (a rectangle, corners 0, 44px high, no shadow), type, wording, the mark and the height are fixed. Put nothing else inside the button.
+
+| `kind` | `en` | `ja` |
+|--------|------|------|
+| `sign-in` | Sign in with Clavis | Clavis でサインイン |
+| `link` | Link your Clavis account | Clavis と連携 |
+
+The page loads nothing from Clavis: no script, frame or image, no cookie, nothing measured. The mark is inline SVG, and the label font comes with `button.css` from your own origin.
+
+On a press the button waits in place (the mark is carved and lifted again; still under `prefers-reduced-motion`) and calls `start`. It opens the URL with `location.assign` only when it is https on `allowedHosts`; `http` is accepted only on a loopback host. The button keeps waiting until the page goes.
+
+When `start` throws, or the URL will not be opened, the button stops waiting and shows one line under it in the resolved language, without the technical reason. `onError` receives the error, and `press()` on the returned handle rejects with it. What `start` threw is passed on as it is; a URL the button will not open is a `ClavisButtonError`.
+
+| `code` | Cause |
+|--------|-------|
+| `invalid_start_url` | Not an absolute URL |
+| `insecure_start_url` | Not `https`, and not `http` on a loopback host |
+| `start_url_credentials` | Carries a user name or password |
+| `start_url_host_not_allowed` | Host is not in `allowedHosts`. `host` carries it |
+
+```ts
+const handle = mountClavisButton(element, {
+  kind: "link",
+  tone: "secondary",
+  uiLocales: ["ja"],
+  allowedHosts: ["api.clavis.nexus"],
+  start,
+  onError: (error) => console.error(error),
+});
+// handle.button, handle.press(), handle.unmount()
+```
+
+For a page rendered on the server, write the same markup with `renderClavisButtonHtml` and mount it in the browser. Pass the same options, including `uiLocales`, so the two agree.
+
+```ts
+import { renderClavisButtonHtml } from "@clavis.nexus/app-shell";
+
+const html = `<div id="clavis-sign-in">${renderClavisButtonHtml({ kind: "sign-in", tone: "primary", uiLocales: ["ja"] })}</div>`;
+```
+
+`CLAVIS_BUTTON_TEXT` holds the wording for each language.
+
 ## License
 
 MIT. Copyright (c) 2026 DeepDive, Inc.
+
+The button's label font is Familjen Grotesk at weight 600, cut down to the letters of the labels, under the SIL Open Font License 1.1 (`OFL.txt`).

@@ -3,6 +3,7 @@
  * 証拠束と信頼の文書）を、同梱の照合器で本当に照合する。見本の目録と次元の定義は試験用のダイジェストで照合器を名指すので、
  * 同梱の照合器をそのダイジェストでも読み込ませる（`verifiers`）。
  */
+import { canonicalStringify } from "./canonical-json.js";
 import { contentDigest } from "./trust.js";
 import { bundledVerifierBytes, type VerifierModule } from "./verifier.js";
 import ops from "./vectors/collatio-ops-1.json";
@@ -50,20 +51,23 @@ export function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-export type Handler = (url: URL, init: RequestInit | undefined) => Response | Promise<Response> | null;
+export type Handler = (url: URL, init: RequestInit | undefined) => Response | Promise<Response | null> | null;
 
 /**
  * 照合面と API の作り物。照合面は見本の信頼の文書・登録表と、受領の印を含むチェックポイントを置き、API は第一者のシャードの
  * 包含証明を出す。`api` に App 向けの API の応答を書く。呼ばれた URL を `calls` に残す。
  */
-export function fakeNet(api: Handler = () => null, over: { checkpoint?: string | null; inclusion?: string[] | null } = {}) {
+export function fakeNet(
+  api: Handler = () => null,
+  over: { checkpoint?: string | null; inclusion?: string[] | null; jwks?: () => string } = {},
+) {
   const calls: string[] = [];
   const registry = TRUST.registries[0]!;
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     calls.push(`${init?.method ?? "GET"} ${url.origin}${url.pathname}${url.search}`);
     if (url.origin === TRUST_ORIGIN) {
-      if (url.pathname === "/v1/jwks.json") return new Response(TRUST.jwks);
+      if (url.pathname === "/v1/jwks.json") return new Response(over.jwks ? over.jwks() : TRUST.jwks);
       if (url.pathname === "/v1/catalog.json") return new Response(TRUST.catalog);
       if (url.pathname === REGISTRY_PATH) return new Response(registry);
       if (url.pathname === "/v1/logs/first-party.0/checkpoint") {
@@ -105,4 +109,43 @@ export async function vectorLedgerSigner() {
       return `${body}\n— ${kid} ${b64(new Uint8Array([...keyHash, ...sig]))}\n`;
     },
   };
+}
+
+const b64u = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/**
+ * 見本の発行者と同じ決まりで、種から P-256 の秘密鍵を作る（`p256/<label>`）。公開鍵を持たない PKCS#8 を読ませ、
+ * 公開鍵は WebCrypto に計算させる。
+ */
+export async function vectorP256(label: string): Promise<{ privateKey: CryptoKey; jwk: { kty: "EC"; crv: "P-256"; x: string; y: string } }> {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(`collatio.vectors/p256/${label}`)));
+  const prefix = [
+    0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce,
+    0x3d, 0x03, 0x01, 0x07, 0x04, 0x27, 0x30, 0x25, 0x02, 0x01, 0x01, 0x04, 0x20,
+  ];
+  const privateKey = await crypto.subtle.importKey("pkcs8", new Uint8Array([...prefix, ...d]), { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
+  const exported = await crypto.subtle.exportKey("jwk", privateKey);
+  return { privateKey, jwk: { kty: "EC", crv: "P-256", x: exported.x!, y: exported.y! } };
+}
+
+/** 集約 JWKS の一つの鍵。封印者（見本の `p256/sealer`）が、鍵の枠と公開鍵に署名する */
+export async function sealedJwksKey(slot: string, kid: string, jwk: { kty: "EC"; crv: "P-256"; x: string; y: string }): Promise<Record<string, unknown>> {
+  const sealer = await vectorP256("sealer");
+  const payload = { version: 1, purpose: "signed-jwks-child", protocol_ns: "clavis", slot, public_jwk: { ...jwk, kid, alg: "ES256" } };
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, sealer.privateKey, utf8(canonicalStringify(payload))));
+  return { ...jwk, kid, alg: "ES256", "clavis-slot": slot, "clavis-sealer-signature": b64u(sig) };
+}
+
+/** 見本の集約 JWKS に鍵を足したもの（文字列） */
+export function jwksWith(...keys: Record<string, unknown>[]): string {
+  const doc = JSON.parse(TRUST.jwks) as { keys: unknown[]; sealer: unknown };
+  return JSON.stringify({ keys: [...doc.keys, ...keys], sealer: doc.sealer });
+}
+
+/** セッションの鍵（`wauthn-auth-jwt`）。id_token に署名する */
+export async function sessionSigner(kid = "clavis-wauthn-auth-jwt-test") {
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const exported = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  const jwk = { kty: "EC" as const, crv: "P-256" as const, x: exported.x!, y: exported.y! };
+  return { kid, privateKey: pair.privateKey, jwksKey: await sealedJwksKey("wauthn-auth-jwt", kid, jwk) };
 }

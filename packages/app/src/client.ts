@@ -36,7 +36,32 @@ import {
   type LedgerHandoff,
 } from "./ledger/handoff.js";
 import {
-  createVerifier,
+  assertPendingLink,
+  buildLinkClaims,
+  linkFrom,
+  normalizeAppUser,
+  type Link,
+  type PendingLink,
+  type RegisterLinkInput,
+  type RegisterLinkResult,
+} from "./link.js";
+import {
+  assertPendingSignIn,
+  buildSignInStart,
+  checkedReturnUrl,
+  parseOrgMembership,
+  parseTokenResponse,
+  readSignInCallback,
+  SIGN_IN_KEY_SLOT,
+  verifyIdToken,
+  type BeginSignInInput,
+  type BeginSignInResult,
+  type OrgMembership,
+  type PendingSignIn,
+  type SignIn,
+} from "./sign-in.js";
+import {
+  createVerifierWithKeys,
   type MandateHistoryFacts,
   type MandateRecordFacts,
   type ReceiptAnchor,
@@ -97,6 +122,10 @@ export type RegisterGenericSignInput = {
    */
   returnUrl?: string;
   webhookUrl?: string;
+  /**
+   * To name one signer: that person's ID in this app, the `sub` from `completeSignIn` or `completeLink`
+   * (the same as `sub` on completion). Only that person can sign.
+   */
   allowedSub?: string;
   displayHint?: string;
   /**
@@ -322,6 +351,31 @@ export type WebhookPing = {
 
 export type { CommitLedgerInput, FinishLedgerHandoffOptions, LedgerEvidence, LedgerHandoff };
 
+export type SignInCallOptions = { signal?: AbortSignal };
+
+export type RefreshSignInInput = {
+  /** The refresh token from the last sign-in or refresh */
+  refreshToken: string;
+  /** The user's ID in this app from that sign-in. The new id_token must name the same user */
+  sub: string;
+  signal?: AbortSignal;
+};
+
+export type RevokeSignInOptions = {
+  /** Which kind of token `token` is. Omitted, Clavis works it out */
+  tokenTypeHint?: "access_token" | "refresh_token";
+  signal?: AbortSignal;
+};
+
+export type EndSessionUrlInput = {
+  /** Where Clavis sends the user after signing out: one of the app's redirect paths, as an https URL */
+  postLogoutRedirectUri?: string;
+  /** Returned to `postLogoutRedirectUri` as it is */
+  state?: string;
+  /** The id_token from the sign-in */
+  idTokenHint?: string;
+};
+
 export type AppClient = {
   registerGenericSign: (input: RegisterGenericSignInput) => Promise<RegisterResult>;
   /** Submit the leaf and return the handoff, which carries the opening. The salt is not sent. */
@@ -366,6 +420,36 @@ export type AppClient = {
   listMandates: (input: { sub: string; state?: "open" | "closed"; signal?: AbortSignal }) => Promise<MandateView[]>;
   /** Close the delegation from the app's side (reason `revoked_by_app`) */
   revokeMandate: (mandateId: string, options?: MandateCallOptions) => Promise<MandateView>;
+  /**
+   * Start Sign in with Clavis: the authorization URL to send the user to, and `pending`, which you
+   * keep on your server until the user comes back. Nothing is sent to Clavis.
+   */
+  beginSignIn: (input: BeginSignInInput) => Promise<BeginSignInResult>;
+  /**
+   * Finish the sign-in on the return to `redirectUri`. The SDK checks `state`, exchanges the code with
+   * the PKCE verifier, and checks the id_token. `sub` is the user's ID in this app, the value to pass
+   * as `allowedSub`. The user stopping is `declined`; sign-in not open to this app, or the exchange
+   * refused, is `unavailable`.
+   */
+  completeSignIn: (callback: string | URL | URLSearchParams, pending: PendingSignIn, options?: SignInCallOptions) => Promise<SignIn>;
+  /** New tokens from the refresh token, with the new id_token checked. A refusal (the user revoked the app, the session ended) is `unavailable` */
+  refreshSignIn: (input: RefreshSignInInput) => Promise<SignIn>;
+  /** Revoke an access token or a refresh token. Revoking either ends the refresh tokens of that sign-in */
+  revokeSignIn: (token: string, options?: RevokeSignInOptions) => Promise<void>;
+  /** The URL that signs the user out of Clavis's sign-in screen and sends them to `postLogoutRedirectUri`. Nothing is sent */
+  endSessionUrl: (input?: EndSessionUrlInput) => string;
+  /** The user's role in the Org that owns this app, read with the access token of a sign-in that asked for `org.role` */
+  orgMembership: (accessToken: string, options?: SignInCallOptions) => Promise<OrgMembership>;
+  /**
+   * Register a request to link the signed-in user's Clavis account (`federation.link`). Show
+   * `displayCode` to the user, send them to `consumeUrl`, and keep `pending` on your server.
+   */
+  registerLink: (input: RegisterLinkInput) => Promise<RegisterLinkResult>;
+  /**
+   * Read the link's completion, have the verifier check its app receipt, and check that it binds the
+   * user, nonce and issuer you asked for. Before the user has signed, it is `link_pending`.
+   */
+  completeLink: (pending: PendingLink, options?: SignInCallOptions) => Promise<Link>;
 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -763,13 +847,15 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
   }
   if (opts.trustRoot === undefined) throw new AppClientError("invalid_trust_root", "trustRoot (the Master public JWK) is required");
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const verifier = createVerifier({
+  const { verifier, trustedKey } = createVerifierWithKeys({
     trustRoot: opts.trustRoot,
     apiOrigin,
     ...(opts.trustOrigins ? { trustOrigins: opts.trustOrigins } : {}),
     ...(opts.verifiers ? { verifiers: opts.verifiers } : {}),
     fetchImpl,
   });
+  /** The issuer of id_tokens and of links: the API origin */
+  const issuer = apiOrigin;
 
   async function request(url: string, init?: RequestInit, signal?: AbortSignal): Promise<Response> {
     if (signal?.aborted) throw new AppClientError("aborted", "request aborted", undefined, { cause: signal.reason });
@@ -1218,6 +1304,187 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     return view;
   }
 
+  /** The session key (`wauthn-auth-jwt`) for `kid`, from the aggregate JWKS the verifier checked against trustRoot */
+  async function sessionKey(kid: string): Promise<JsonWebKey | null> {
+    const key = await trustedKey(kid, SIGN_IN_KEY_SLOT);
+    return key && key.alg === "ES256" ? key.jwk : null;
+  }
+
+  /** A form POST to the OIDC endpoints. A response that is not JSON reads as null */
+  async function postForm(path: string, form: Record<string, string>, signal?: AbortSignal): Promise<{ res: Response; body: unknown }> {
+    const res = await request(
+      `${apiOrigin}${path}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        body: new URLSearchParams(form).toString(),
+      },
+      signal,
+    );
+    let body: unknown = null;
+    try {
+      body = await readJson(res);
+    } catch (e) {
+      if (res.ok) throw e;
+    }
+    return { res, body };
+  }
+
+  /** Exchange at the token endpoint and check the id_token. Any refusal is `unavailable` */
+  async function tokenGrant(
+    op: string,
+    form: Record<string, string>,
+    expect: { nonce?: string; sub?: string },
+    signal?: AbortSignal,
+  ): Promise<SignIn> {
+    const { res, body } = await postForm("/oauth/token", form, signal);
+    if (!res.ok) {
+      const details = apiErrorDetails(body);
+      throw new AppClientError("unavailable", httpFailureMessage(op, res.status, details), res.status, details);
+    }
+    const tokens = parseTokenResponse(body, Math.floor(Date.now() / 1000));
+    const claims = await verifyIdToken(tokens.idToken, {
+      issuer,
+      appId,
+      accessToken: tokens.accessToken,
+      key: sessionKey,
+      ...(expect.nonce !== undefined ? { nonce: expect.nonce } : {}),
+      ...(expect.sub !== undefined ? { sub: expect.sub } : {}),
+    });
+    return { iss: issuer, ...claims, tokens };
+  }
+
+  async function beginSignIn(input: BeginSignInInput): Promise<BeginSignInResult> {
+    return buildSignInStart(apiOrigin, appId, input, normalizeUiLocales(input?.uiLocales));
+  }
+
+  async function completeSignIn(
+    callback: string | URL | URLSearchParams,
+    pending: PendingSignIn,
+    options?: SignInCallOptions,
+  ): Promise<SignIn> {
+    assertPendingSignIn(pending);
+    const code = readSignInCallback(callback, pending, issuer);
+    return tokenGrant(
+      "token",
+      {
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: pending.redirectUri,
+        client_id: appId,
+        code_verifier: pending.codeVerifier,
+      },
+      { nonce: pending.nonce },
+      options?.signal,
+    );
+  }
+
+  async function refreshSignIn(input: RefreshSignInInput): Promise<SignIn> {
+    const refreshToken = typeof input?.refreshToken === "string" ? input.refreshToken.trim() : "";
+    if (!refreshToken || typeof input.sub !== "string" || !SUBJECT_RE.test(input.sub)) {
+      throw new AppClientError("invalid_sign_in_args", "refreshToken and the sub of that sign-in are required");
+    }
+    return tokenGrant(
+      "refresh",
+      { grant_type: "refresh_token", refresh_token: refreshToken, client_id: appId },
+      { sub: input.sub },
+      input.signal,
+    );
+  }
+
+  async function revokeSignIn(token: string, options?: RevokeSignInOptions): Promise<void> {
+    const value = typeof token === "string" ? token.trim() : "";
+    if (!value) throw new AppClientError("invalid_sign_in_args", "token required");
+    const hint = options?.tokenTypeHint;
+    if (hint !== undefined && hint !== "access_token" && hint !== "refresh_token") {
+      throw new AppClientError("invalid_sign_in_args", "tokenTypeHint must be access_token or refresh_token");
+    }
+    const { res, body } = await postForm(
+      "/oauth/revoke",
+      { token: value, client_id: appId, ...(hint ? { token_type_hint: hint } : {}) },
+      options?.signal,
+    );
+    if (!res.ok) {
+      const details = apiErrorDetails(body);
+      throw new AppClientError("revoke_failed", httpFailureMessage("revoke", res.status, details), res.status, details);
+    }
+  }
+
+  function endSessionUrl(input: EndSessionUrlInput = {}): string {
+    const q = new URLSearchParams({ client_id: appId });
+    if (input.postLogoutRedirectUri !== undefined) {
+      q.set("post_logout_redirect_uri", checkedReturnUrl(input.postLogoutRedirectUri, "postLogoutRedirectUri"));
+    }
+    if (input.state !== undefined) q.set("state", input.state);
+    if (input.idTokenHint !== undefined) q.set("id_token_hint", input.idTokenHint);
+    return `${apiOrigin}/oauth/end-session?${q.toString()}`;
+  }
+
+  async function orgMembership(accessToken: string, options?: SignInCallOptions): Promise<OrgMembership> {
+    const token = typeof accessToken === "string" ? accessToken.trim() : "";
+    if (!token) throw new AppClientError("invalid_sign_in_args", "accessToken required");
+    const res = await request(
+      `${apiOrigin}/oauth/org-membership`,
+      { headers: { authorization: `Bearer ${token}`, accept: "application/json" } },
+      options?.signal,
+    );
+    let body: unknown = null;
+    try {
+      body = await readJson(res);
+    } catch (e) {
+      if (res.ok) throw e;
+    }
+    if (!res.ok) {
+      const details = apiErrorDetails(body);
+      throw new AppClientError("org_membership_failed", httpFailureMessage("org membership", res.status, details), res.status, details);
+    }
+    return parseOrgMembership(body, appId);
+  }
+
+  async function registerLink(input: RegisterLinkInput): Promise<RegisterLinkResult> {
+    const appUser = normalizeAppUser(input?.appUser);
+    const allowedSub =
+      input.allowedSub === undefined ? undefined : typeof input.allowedSub === "string" ? input.allowedSub.trim() : "";
+    if (allowedSub !== undefined && !SUBJECT_RE.test(allowedSub)) {
+      throw new AppClientError("invalid_allowed_sub", "allowedSub must be the user's ID in this App");
+    }
+    const uiLocales = normalizeUiLocales(input.uiLocales);
+    const ttl = checkedTtl(input.ttlSeconds);
+    const now = Math.floor(Date.now() / 1000);
+    const nonce = crypto.randomUUID();
+    const claims = buildLinkClaims({
+      appId,
+      iat: now,
+      exp: now + ttl,
+      jti: crypto.randomUUID(),
+      appUser,
+      nonce,
+      iss: issuer,
+      returnUrl: input.returnUrl,
+      webhookUrl: input.webhookUrl,
+      allowedSub,
+      uiLocales,
+    });
+    const { result } = await postRegister(claims, input.signal);
+    if (!result.linkConsumeUrl) throw new AppClientError("invalid_register_response", "link_consume_url missing");
+    if (!result.displayCode) throw new AppClientError("invalid_register_response", "display_code missing");
+    return {
+      requestId: result.requestId,
+      consumeUrl: result.linkConsumeUrl,
+      displayCode: result.displayCode,
+      pending: { requestId: result.requestId, pollSecret: result.pollSecret, appUser, nonce, iss: issuer },
+    };
+  }
+
+  async function completeLink(pending: PendingLink, options?: SignInCallOptions): Promise<Link> {
+    assertPendingLink(pending);
+    const read = await readStatus(pending.requestId, pending.pollSecret, options?.signal);
+    if (read.state !== "completed") {
+      throw new AppClientError("link_pending", `the link has not been signed yet (${read.state})`);
+    }
+    return linkFrom(await verifiedCompletion(verifier, read.receipt, pending.requestId, appId), pending);
+  }
+
   const ledgerHttp = { apiOrigin, appId, operateJwk, fetchImpl, verifier };
 
   async function commitLedger(input: CommitLedgerInput): Promise<LedgerHandoff> {
@@ -1244,5 +1511,13 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     revokeMandate,
     commitLedger,
     finishLedgerHandoff: finishLedger,
+    beginSignIn,
+    completeSignIn,
+    refreshSignIn,
+    revokeSignIn,
+    endSessionUrl,
+    orgMembership,
+    registerLink,
+    completeLink,
   };
 }

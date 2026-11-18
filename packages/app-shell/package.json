@@ -1,7 +1,7 @@
 {
   "name": "@clavis.nexus/app-shell",
-  "version": "2.0.1",
-  "description": "Browser preparation overlay for Clavis App handoff to Connect",
+  "version": "2.1.0",
+  "description": "Browser parts for Clavis App: the overlay that hands over to Connect, and the Sign in with Clavis and Link your Clavis account button",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -16,18 +16,20 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./styles.css": "./dist/styles.css"
+    "./styles.css": "./dist/styles.css",
+    "./button.css": "./dist/button.css"
   },
   "files": [
     "dist",
     "LICENSE",
+    "OFL.txt",
     "README.md"
   ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsup && cp src/styles.css dist/styles.css",
+    "build": "tsup && cp src/styles.css src/button.css src/clavis-button-grotesk.woff2 dist/",
     "prepack": "pnpm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
