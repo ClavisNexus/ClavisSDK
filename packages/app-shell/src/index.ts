@@ -1,8 +1,17 @@
 export { openHandoffShell } from "./shell.js";
-export { HandoffShellError } from "./errors.js";
-export type { HandoffShellErrorCode, HandoffShellErrorDetails } from "./errors.js";
-export { HANDOFF_TEXT, resolveHandoffText } from "./text.js";
-export type { HandoffLocale } from "./text.js";
+export { mountClavisButton, renderClavisButtonHtml } from "./button.js";
+export type {
+  ClavisButtonHandle,
+  ClavisButtonOptions,
+  ClavisButtonTheme,
+  ClavisButtonTone,
+  ClavisButtonWidth,
+  MountClavisButtonOptions,
+} from "./button.js";
+export { ClavisButtonError, HandoffShellError } from "./errors.js";
+export type { ClavisButtonErrorCode, HandoffShellErrorCode, HandoffShellErrorDetails } from "./errors.js";
+export { CLAVIS_BUTTON_TEXT, HANDOFF_TEXT, resolveHandoffText } from "./text.js";
+export type { ClavisButtonText, HandoffLocale } from "./text.js";
 export { HANDOFF_PHASE_IDS } from "./types.js";
 export type {
   HandoffPhaseId,

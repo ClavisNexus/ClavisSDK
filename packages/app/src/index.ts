@@ -29,7 +29,21 @@ export type {
   RegisterMandateResult,
   UseMandateInput,
   WaitForMandateOptions,
+  EndSessionUrlInput,
+  RefreshSignInInput,
+  RevokeSignInOptions,
+  SignInCallOptions,
 } from "./client.js";
+export type {
+  BeginSignInInput,
+  BeginSignInResult,
+  OrgMembership,
+  PendingSignIn,
+  SignIn,
+  SignInScope,
+  SignInTokens,
+} from "./sign-in.js";
+export type { Link, PendingLink, RegisterLinkInput, RegisterLinkResult } from "./link.js";
 export { createVerifier } from "./verify.js";
 export type {
   CreateVerifierOptions,

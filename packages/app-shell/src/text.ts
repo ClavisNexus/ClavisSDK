@@ -60,6 +60,11 @@ function browserLocales(): readonly string[] {
   return navigator.language ? [navigator.language] : [];
 }
 
+/** The language this package shows: `uiLocales` in order, then the browser's languages, then `en` */
+export function resolveLocale(uiLocales?: readonly string[]): HandoffLocale {
+  return match(uiLocales ?? []) ?? match(browserLocales()) ?? FALLBACK_LOCALE;
+}
+
 /**
  * Pick the overlay's language: `uiLocales` in order, then the browser's languages, then `en`.
  * `override` replaces single keys, so a language this package does not ship can be passed in whole.
@@ -68,7 +73,7 @@ export function resolveHandoffText(
   uiLocales?: readonly string[],
   override?: HandoffTextOverride,
 ): HandoffText {
-  const locale = match(uiLocales ?? []) ?? match(browserLocales()) ?? FALLBACK_LOCALE;
+  const locale = resolveLocale(uiLocales);
   const base = HANDOFF_TEXT[locale];
   if (!override) return base;
   const { phases, ...rest } = override;
@@ -81,3 +86,31 @@ export function resolveHandoffText(
   }
   return merged;
 }
+
+/** The wording of the Sign in with Clavis button, written for each language. Keys are shared; the wording is not a translation */
+export type ClavisButtonText = {
+  /** The button's label */
+  label: string;
+  /** The line under the button when `start` failed: another press may get through */
+  retry: string;
+  /** The line under the button when the URL from `start` will not be opened: another press will not help */
+  blocked: string;
+};
+
+const BUTTON_EN: ClavisButtonText = {
+  label: "Sign in with Clavis",
+  retry: "Couldn't start signing in. Try again in a moment.",
+  blocked: "Couldn't start signing in. Please contact this site's support.",
+};
+
+const BUTTON_JA: ClavisButtonText = {
+  label: "Clavis でサインイン",
+  retry: "サインインを始められませんでした。もう一度お試しください。",
+  blocked: "サインインを始められませんでした。このサイトのサポートにお問い合わせください。",
+};
+
+/** The button's wording, by language. The button resolves the language the same way as the handoff overlay */
+export const CLAVIS_BUTTON_TEXT: Readonly<Record<HandoffLocale, ClavisButtonText>> = Object.freeze({
+  en: Object.freeze(BUTTON_EN),
+  ja: Object.freeze(BUTTON_JA),
+});

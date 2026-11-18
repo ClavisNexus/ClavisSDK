@@ -1,4 +1,5 @@
-import { HandoffShellError } from "./errors.js";
+import { HandoffShellError, type HandoffShellErrorCode } from "./errors.js";
+import { checkNavigationUrl, type NavigationRefusal } from "./navigation.js";
 import { resolveHandoffText } from "./text.js";
 import {
   HANDOFF_PHASE_IDS,
@@ -35,34 +36,18 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+const CONSUME_URL_REFUSALS: Record<NavigationRefusal, [HandoffShellErrorCode, (host?: string) => string]> = {
+  invalid: ["invalid_consume_url", () => "consume_url is not an absolute URL"],
+  insecure: ["insecure_consume_url", () => "consume_url must be https; http is accepted only on a loopback host"],
+  credentials: ["consume_url_credentials", () => "consume_url must not carry credentials"],
+  host_not_allowed: ["consume_url_host_not_allowed", (host) => `consume_url host ${host} is not in allowedConsumeHosts`],
+};
+
 function assertConsumeUrl(value: string, allowedHosts: readonly string[]): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch (cause) {
-    throw new HandoffShellError("invalid_consume_url", "consume_url is not an absolute URL", { cause });
-  }
-  const host = url.hostname.toLowerCase();
-  const loopback = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-    throw new HandoffShellError(
-      "insecure_consume_url",
-      "consume_url must be https; http is accepted only on a loopback host",
-      { host },
-    );
-  }
-  if (url.username || url.password) {
-    throw new HandoffShellError("consume_url_credentials", "consume_url must not carry credentials", { host });
-  }
-  const allowed = allowedHosts.some((item) => item.trim().toLowerCase() === host);
-  if (!allowed) {
-    throw new HandoffShellError(
-      "consume_url_host_not_allowed",
-      `consume_url host ${host} is not in allowedConsumeHosts`,
-      { host },
-    );
-  }
-  return url.toString();
+  const checked = checkNavigationUrl(value, allowedHosts);
+  if (checked.ok) return checked.url;
+  const [code, message] = CONSUME_URL_REFUSALS[checked.refusal];
+  throw new HandoffShellError(code, message(checked.host), { host: checked.host, cause: checked.cause });
 }
 
 /**
