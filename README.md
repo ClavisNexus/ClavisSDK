@@ -35,3 +35,25 @@ Clavis App 向けの公開 npm パッケージ。ライセンスは MIT。
 `setup` は `@clavis.nexus/app` に依存する。`app` の新版を承認してから `setup` のタグを打つ。pack した `package.json` が npm に無い版の作業区画パッケージに依存していると、`scripts/release-check.mjs` が止める。
 
 `app` は照合器 `@clavis.nexus/collatio` に正確な版で依存する。版を替えたら、照合器のリポジトリをその版のタグ（`vX.Y.Z`）にして `node scripts/sync-collatio.mjs` で試験の見本（`packages/app/src/vectors/collatio-ops-1.json`）を取り直す。
+
+## 依存の監査（メンテナ）
+
+`ci` は install の前に `pnpm run audit:security`（`scripts/audit-security.mjs`）を走らせ、`pnpm audit` の high 以上の勧告で落とす。毎日の schedule でも同じものが走る。
+
+修正版がまだ無い勧告は直す手が無く、どの PR も同じ所で止まる。次をすべて満たすときだけ、`scripts/audit-exceptions.json` に例外を置いて通す。
+
+- 公開するパッケージの依存に入らない。`pnpm audit --prod` には例外を当てず、そこに high 以上があれば必ず落とす
+- 攻撃者が入力を渡せる経路が無い（build や試験の道具が、リポに書いた値だけを受け取るなど）
+- 依存の更新や `overrides` で消せない
+
+例外には勧告の ID・パッケージ・見つかった正確な版・理由・決めた日（`decided`）・期限（`until`、`decided` から 30 日まで）を書く。例外を置く・延ばす PR は必須のチェックを弱めるので、理由・影響・外す条件を本文に書き、merge の前に人に確かめる。
+
+スクリプトは次のとき例外を当てずに落とす。修正版の公開と期限は毎日の schedule で見張る。
+
+- 期限を過ぎた。勧告を読み直し、外すか延ばす
+- 例外に無い版やパッケージが見つかった
+- 修正版が公開され、`minimumReleaseAge`（7 日）が経った。経つまでは install できないので例外のまま通し、いつから入れられるかを出す。経ったら lockfile を上げて例外を外す
+- 当たる勧告が無くなった。例外を外す
+- audit や registry の応答を読めない
+
+スクリプトの試験は `pnpm run test:scripts`（install は要らない）。
