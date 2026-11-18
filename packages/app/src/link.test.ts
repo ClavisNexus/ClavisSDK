@@ -26,15 +26,22 @@ const registered = (extra: Record<string, unknown> = {}) => ({
 });
 
 /** 登録と status を答える App の API。`status` は status の本文（`{ payload }` の中身） */
-async function clientFor(answer: { register?: unknown; status?: () => unknown } = {}) {
+async function clientFor(answer: { register?: unknown; status?: () => unknown; returnCode?: string } = {}) {
   const posted: string[] = [];
+  /** status を読んだときの `X-Intent-Return-Code`（無ければ null） */
+  const returnCodes: Array<string | null> = [];
   const net = fakeNet((url, init) => {
     if (url.pathname === "/app/intent-requests/register") {
       posted.push(String(init?.body));
       return jsonResponse(answer.register ?? registered());
     }
     if (url.pathname.startsWith("/app/intent-requests/status/")) {
-      expect(new Headers(init?.headers).get("X-Intent-Poll-Secret")).toBe("poll-secret");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-Intent-Poll-Secret")).toBe("poll-secret");
+      returnCodes.push(headers.get("X-Intent-Return-Code"));
+      if (answer.returnCode !== undefined && headers.get("X-Intent-Return-Code") !== answer.returnCode) {
+        return jsonResponse({ error: headers.get("X-Intent-Return-Code") ? "RETURN_CODE_MISMATCH" : "RETURN_CODE_REQUIRED", message: "m" }, 403);
+      }
       return jsonResponse({ payload: answer.status?.() ?? { state: "pending", request_id: REQUEST } });
     }
     return null;
@@ -47,7 +54,7 @@ async function clientFor(answer: { register?: unknown; status?: () => unknown } 
     verifiers: VERIFIERS,
     fetchImpl: net.fetchImpl,
   });
-  return { client, posted, net };
+  return { client, posted, net, returnCodes };
 }
 
 const pendingFor = (extra: Partial<PendingLink> = {}): PendingLink => ({
@@ -97,7 +104,9 @@ describe("registerLink", () => {
     expect(claims).not.toHaveProperty("payload");
     expect(claims).not.toHaveProperty("payload_sha256");
     expect(claims.exp).toBe((claims.iat as number) + 120);
+    expect(claims).not.toHaveProperty("link_confirm");
     expect(result).toEqual({
+      confirm: "code",
       requestId: REQUEST,
       consumeUrl: `${API_ORIGIN}/app/intent-requests/consume-link/${REQUEST}`,
       displayCode: "AB12CD34EF",
@@ -126,6 +135,93 @@ describe("registerLink", () => {
       const { client } = await clientFor({ register: registered(extra) });
       await expect(client.registerLink({ appUser: "staff-01" })).rejects.toMatchObject({ code: "invalid_register_response" });
     }
+  });
+});
+
+const RETURN_CODE = "Rc".repeat(21) + "x";
+const returnUrl = "https://app.example/clavis/linked";
+const returned = (extra: Record<string, string> = {}) => {
+  const u = new URL(returnUrl);
+  u.searchParams.set("request_id", REQUEST);
+  u.searchParams.set("return_code", RETURN_CODE);
+  for (const [k, v] of Object.entries(extra)) u.searchParams.set(k, v);
+  return u.toString();
+};
+
+describe("a link confirmed by the return", () => {
+  it("registers link_confirm with the return URL and keeps no display code", async () => {
+    const { client, posted } = await clientFor({ register: registered({ display_code: undefined }) });
+    const result = await client.registerLink({ appUser: "staff-01", confirm: "return", returnUrl });
+    const claims = decodeJwt((JSON.parse(posted[0]!) as { registration: string }).registration);
+    expect(claims.link_confirm).toBe("return");
+    expect(claims.return_url).toBe(returnUrl);
+    expect(result).toEqual({
+      confirm: "return",
+      requestId: REQUEST,
+      consumeUrl: `${API_ORIGIN}/app/intent-requests/consume-link/${REQUEST}`,
+      pending: expect.objectContaining({ requestId: REQUEST, appUser: "staff-01", confirm: "return" }),
+    });
+    expect(result).not.toHaveProperty("displayCode");
+  });
+
+  it("needs a return URL, and refuses a response that still carries a display code", async () => {
+    const { client, posted } = await clientFor();
+    await expect(client.registerLink({ appUser: "staff-01", confirm: "return", returnUrl: " " })).rejects.toMatchObject({
+      code: "invalid_link_confirm",
+    });
+    await expect(client.registerLink({ appUser: "staff-01", confirm: "redirect" } as never)).rejects.toMatchObject({ code: "invalid_link_confirm" });
+    expect(posted).toHaveLength(0);
+    await expect(client.registerLink({ appUser: "staff-01", confirm: "return", returnUrl })).rejects.toMatchObject({
+      code: "invalid_register_response",
+    });
+  });
+
+  it("completes only with this link's return and the user who started it, sending the return code", async () => {
+    const { client, net, returnCodes } = await clientFor({ status: completed, returnCode: RETURN_CODE });
+    vi.spyOn(client.verifier, "verifyReceipt").mockResolvedValue(linkReceipt());
+    const pending = pendingFor({ confirm: "return" });
+    const refused = [
+      [{}, "link_user_mismatch"],
+      [{ appUser: "staff-01" }, "link_return_mismatch"],
+      [{ appUser: "staff-02", returned: returned() }, "link_user_mismatch"],
+      [{ appUser: "staff-01", returned: returned({ request_id: "eu1.another" }) }, "link_return_mismatch"],
+      [{ appUser: "staff-01", returned: returned({ return_code: "short" }) }, "link_return_mismatch"],
+      [{ appUser: "staff-01", returned: returnUrl }, "link_return_mismatch"],
+    ] as const;
+    for (const [options, code] of refused) {
+      await expect(client.completeLink(pending, options)).rejects.toMatchObject({ code });
+    }
+    // 照らす前に断ったものは、status を読まない
+    expect(net.calls).toEqual([]);
+    for (const form of [returned(), new URL(returned()), new URL(returned()).searchParams, new URL(returned()).search]) {
+      await expect(client.completeLink(pending, { appUser: " staff-01 ", returned: form })).resolves.toMatchObject({
+        sub: PAIRWISE,
+        appUser: "staff-01",
+      });
+    }
+    expect(returnCodes.every((c) => c === RETURN_CODE)).toBe(true);
+  });
+
+  it("reads a wrong return code from Clavis as link_return_mismatch", async () => {
+    const { client } = await clientFor({ status: completed, returnCode: "Zz".repeat(21) + "z" });
+    await expect(client.completeLink(pendingFor({ confirm: "return" }), { appUser: "staff-01", returned: returned() })).rejects.toMatchObject({
+      code: "link_return_mismatch",
+      apiError: "RETURN_CODE_MISMATCH",
+    });
+  });
+
+  it("checks the user on a code link when it is given, and reads status without a return code", async () => {
+    const { client, returnCodes } = await clientFor({ status: completed });
+    vi.spyOn(client.verifier, "verifyReceipt").mockResolvedValue(linkReceipt());
+    await expect(client.completeLink(pendingFor(), { appUser: "staff-02" })).rejects.toMatchObject({ code: "link_user_mismatch" });
+    await expect(client.completeLink(pendingFor(), { appUser: "staff-01" })).resolves.toMatchObject({ sub: PAIRWISE });
+    await expect(client.completeLink(pendingFor())).resolves.toMatchObject({ sub: PAIRWISE });
+    expect(returnCodes).toEqual([null, null]);
+  });
+
+  it("refuses a pending value whose confirm it does not know", async () => {
+    const { client } = await clientFor({ status: completed });
+    await expect(client.completeLink(pendingFor({ confirm: "code" as "return" }))).rejects.toMatchObject({ code: "invalid_status_args" });
   });
 });
 

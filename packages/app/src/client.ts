@@ -38,12 +38,16 @@ import {
 import {
   assertPendingLink,
   buildLinkClaims,
+  checkLinkReturn,
   linkFrom,
   normalizeAppUser,
+  type CompleteLinkOptions,
   type Link,
   type PendingLink,
   type RegisterLinkInput,
   type RegisterLinkResult,
+  type RegisterReturnLinkInput,
+  type RegisterReturnLinkResult,
 } from "./link.js";
 import {
   assertPendingSignIn,
@@ -442,15 +446,22 @@ export type AppClient = {
   orgMembership: (accessToken: string, options?: SignInCallOptions) => Promise<OrgMembership>;
   /**
    * Register a request to link the signed-in user's Clavis account (`federation.link`). Keep
-   * `pending` on your server, show `displayCode` on your own page (Connect asks the user to type it),
-   * then send the user to `consumeUrl`.
+   * `pending` in that user's session. With `confirm: "return"` (the Link your Clavis account button),
+   * send the user to `consumeUrl` in the same tab and complete the link where they come back. Without
+   * it, show `displayCode` on your own page (Connect asks the user to type it), then send the user to
+   * `consumeUrl`.
    */
-  registerLink: (input: RegisterLinkInput) => Promise<RegisterLinkResult>;
+  registerLink: {
+    (input: RegisterReturnLinkInput): Promise<RegisterReturnLinkResult>;
+    (input: RegisterLinkInput): Promise<RegisterLinkResult>;
+  };
   /**
    * Read the link's completion, have the verifier check its app receipt, and check that it binds the
-   * user, nonce and issuer you asked for. Before the user has signed, it is `link_pending`.
+   * user, nonce and issuer you asked for. Before the user has signed, it is `link_pending`. For a
+   * `return` link, pass `returned` (the URL the user came back to) and `appUser` (the user signed in
+   * now): the return must be this link's and the user the one who started it.
    */
-  completeLink: (pending: PendingLink, options?: SignInCallOptions) => Promise<Link>;
+  completeLink: (pending: PendingLink, options?: CompleteLinkOptions) => Promise<Link>;
 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -980,18 +991,19 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     return { ...result, mandate: { id, terms, ...(onBehalfDomain ? { onBehalf: { domain: onBehalfDomain } } : {}) } };
   }
 
-  async function readStatus(requestId: string, pollSecret: string, signal?: AbortSignal): Promise<StatusRead> {
+  async function readStatus(requestId: string, pollSecret: string, signal?: AbortSignal, returnCode?: string): Promise<StatusRead> {
     if (!requestId.trim() || !pollSecret.trim()) {
       throw new AppClientError("invalid_status_args", "requestId and pollSecret required");
     }
-    const res = await request(
-      `${apiOrigin}/app/intent-requests/status/${encodeURIComponent(requestId)}`,
-      { headers: { "X-Intent-Poll-Secret": pollSecret } },
-      signal,
-    );
+    const headers: Record<string, string> = { "X-Intent-Poll-Secret": pollSecret };
+    if (returnCode) headers["X-Intent-Return-Code"] = returnCode;
+    const res = await request(`${apiOrigin}/app/intent-requests/status/${encodeURIComponent(requestId)}`, { headers }, signal);
     const body = await readJson(res);
     if (!res.ok) {
       const details = apiErrorDetails(body);
+      if (details.apiError === "RETURN_CODE_REQUIRED" || details.apiError === "RETURN_CODE_MISMATCH") {
+        throw new AppClientError("link_return_mismatch", httpFailureMessage("status", res.status, details), res.status, details);
+      }
       throw new AppClientError("status_failed", httpFailureMessage("status", res.status, details), res.status, details);
     }
     const payload = asRecord(body)?.payload;
@@ -1442,8 +1454,19 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     return parseOrgMembership(body, appId);
   }
 
-  async function registerLink(input: RegisterLinkInput): Promise<RegisterLinkResult> {
+  async function registerLink(input: RegisterReturnLinkInput): Promise<RegisterReturnLinkResult>;
+  async function registerLink(input: RegisterLinkInput): Promise<RegisterLinkResult>;
+  async function registerLink(
+    input: RegisterLinkInput | RegisterReturnLinkInput,
+  ): Promise<RegisterLinkResult | RegisterReturnLinkResult> {
     const appUser = normalizeAppUser(input?.appUser);
+    const byReturn = input.confirm === "return";
+    if (input.confirm !== undefined && input.confirm !== "code" && !byReturn) {
+      throw new AppClientError("invalid_link_confirm", "confirm must be code or return");
+    }
+    if (byReturn && (typeof input.returnUrl !== "string" || !input.returnUrl.trim())) {
+      throw new AppClientError("invalid_link_confirm", "a return link needs returnUrl: where the user comes back to complete it");
+    }
     const allowedSub =
       input.allowedSub === undefined ? undefined : typeof input.allowedSub === "string" ? input.allowedSub.trim() : "";
     if (allowedSub !== undefined && !SUBJECT_RE.test(allowedSub)) {
@@ -1465,21 +1488,29 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
       webhookUrl: input.webhookUrl,
       allowedSub,
       uiLocales,
+      ...(byReturn ? { confirm: "return" as const } : {}),
     });
     const { result } = await postRegister(claims, input.signal);
     if (!result.linkConsumeUrl) throw new AppClientError("invalid_register_response", "link_consume_url missing");
+    const pending: PendingLink = { requestId: result.requestId, pollSecret: result.pollSecret, appUser, nonce, iss: issuer };
+    if (byReturn) {
+      // A return link has no display code; one in the response means Clavis did not take the return
+      if (result.displayCode) throw new AppClientError("invalid_register_response", "display_code on a return link");
+      return {
+        confirm: "return",
+        requestId: result.requestId,
+        consumeUrl: result.linkConsumeUrl,
+        pending: { ...pending, confirm: "return" },
+      };
+    }
     if (!result.displayCode) throw new AppClientError("invalid_register_response", "display_code missing");
-    return {
-      requestId: result.requestId,
-      consumeUrl: result.linkConsumeUrl,
-      displayCode: result.displayCode,
-      pending: { requestId: result.requestId, pollSecret: result.pollSecret, appUser, nonce, iss: issuer },
-    };
+    return { confirm: "code", requestId: result.requestId, consumeUrl: result.linkConsumeUrl, displayCode: result.displayCode, pending };
   }
 
-  async function completeLink(pending: PendingLink, options?: SignInCallOptions): Promise<Link> {
+  async function completeLink(pending: PendingLink, options?: CompleteLinkOptions): Promise<Link> {
     assertPendingLink(pending);
-    const read = await readStatus(pending.requestId, pending.pollSecret, options?.signal);
+    const returnCode = checkLinkReturn(pending, options ?? {});
+    const read = await readStatus(pending.requestId, pending.pollSecret, options?.signal, returnCode);
     if (read.state !== "completed") {
       throw new AppClientError("link_pending", `the link has not been signed yet (${read.state})`);
     }

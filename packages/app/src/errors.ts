@@ -60,7 +60,10 @@ export type AppClientErrorCode =
   | "invalid_org_membership"
   | "invalid_app_user"
   | "link_pending"
-  | "link_mismatch";
+  | "link_mismatch"
+  | "invalid_link_confirm"
+  | "link_return_mismatch"
+  | "link_user_mismatch";
 
 export type AppClientErrorDetails = {
   /** The `error` in the API response body, for example `RETURN_URL_NOT_ALLOWED`. */

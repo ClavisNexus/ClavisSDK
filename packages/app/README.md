@@ -304,10 +304,54 @@ const signOut = app.endSessionUrl({ postLogoutRedirectUri: "https://console.exam
 
 Link the Clavis account of a user already signed in to your app, and receive their ID in this app (`sub`).
 
+### From the button (same tab)
+
+The Link your Clavis account button (`@clavis.nexus/app-shell`, `kind: "link"`) takes the user to Connect in the same tab. Connect asks for no code; it sends the user back to `returnUrl` with `request_id` and `return_code`, and the link completes there.
+
 ```ts
 import type { PendingLink } from "@clavis.nexus/app";
 
-async function startLink(localUserId: string, keep: (pending: PendingLink) => Promise<void>): Promise<Response> {
+// POST /api/clavis/link — the button's start()
+async function startLink(session: Session): Promise<Response> {
+  const { consumeUrl, pending } = await app.registerLink({
+    appUser: session.userId,
+    confirm: "return",
+    returnUrl: "https://console.example/settings/clavis/linked",
+    ttlSeconds: 300,
+  });
+  session.set("clavisLink", pending); // this user's session, and only there
+  return Response.json({ url: consumeUrl });
+}
+
+// GET /settings/clavis/linked?request_id=…&return_code=…
+async function linked(request: Request, session: Session): Promise<Response> {
+  const pending = session.take<PendingLink>("clavisLink");
+  let done = false;
+  try {
+    if (pending) {
+      const { iss, sub, appUser, receipt } = await app.completeLink(pending, {
+        returned: request.url,
+        appUser: session.userId,
+      });
+      // Store (iss, sub) ↔ appUser, and the receipt
+      done = true;
+    }
+  } catch {
+    // Not linked: AppClientError says why
+  }
+  // A URL without the return code, whatever happened, so it stays out of the address bar, history and Referer
+  return Response.redirect(`https://console.example/settings/clavis?linked=${done ? 1 : 0}`, 303);
+}
+```
+
+`completeLink` completes a `return` link only when the return's `request_id` is the one in `pending` and `appUser` (the user signed in to your app in this browser now) is the user the link was started for. Take `pending` from the session of the user who pressed the button. A link URL forwarded to someone else then cannot tie that person's account to the user who started it: their browser comes back without this session, and the browser with this session has no return code. Looking `pending` up by the `request_id` in the query, or skipping `appUser`, gives that protection away. Status answers a completed `return` link only with its return code (`X-Intent-Return-Code`); `completeLink` sends it.
+
+The return works in the browser where the button was pressed. When the user should finish on another device, use the code below.
+
+### On another device (display code)
+
+```ts
+async function startLinkElsewhere(localUserId: string, keep: (pending: PendingLink) => Promise<void>): Promise<Response> {
   const { consumeUrl, displayCode, pending } = await app.registerLink({
     appUser: localUserId,
     returnUrl: "https://console.example/settings/clavis",
@@ -318,19 +362,19 @@ async function startLink(localUserId: string, keep: (pending: PendingLink) => Pr
 }
 
 // When the user comes back to returnUrl, or on the webhook ping
-async function linked(take: () => Promise<PendingLink>) {
+async function linkedElsewhere(take: () => Promise<PendingLink>) {
   const { iss, sub, appUser, receipt } = await app.completeLink(await take());
   // Store (iss, sub) ↔ appUser, and the receipt
 }
 ```
 
-In the browser, show `display_code` on your own page first, then hand over to Connect with the handoff shell when the user continues. Connect asks the user to type the code before they sign.
+Show `display_code` on your own page first, then hand over to Connect (a QR code of `consume_url`, or the handoff shell). Connect asks the user to type the code before they sign.
 
 ```ts
 import { openHandoffShell } from "@clavis.nexus/app-shell";
 import "@clavis.nexus/app-shell/styles.css";
 
-const res = await fetch("/api/clavis/link", { method: "POST", credentials: "same-origin" });
+const res = await fetch("/api/clavis/link-elsewhere", { method: "POST", credentials: "same-origin" });
 const { consume_url, display_code } = (await res.json()) as { consume_url: string; display_code: string };
 showConfirmationCode(display_code); // your page: the code, and a button to continue to Clavis
 
@@ -339,9 +383,11 @@ async function continueToClavis() {
 }
 ```
 
+### Both
+
 The user signs `federation.link@1 { app, app_user, nonce, iss }` with a passkey on Connect. `appUser` is your own ID for the user, normalised to NFC with the ends trimmed (at most 128 characters, no control characters). The SDK makes the nonce and names the issuer. The request lives for `ttlSeconds` (120 seconds by default), so the user has to reach Connect within it. Pass `allowedSub` when you already know the user's ID in this app.
 
-`completeLink` reads status with the poll secret in `pending`. Before the user has signed, it is `link_pending`. The verifier checks the app receipt, and the SDK checks that it binds `appUser`, the nonce and the issuer you asked for. Clavis keeps no table of links: the mapping is yours to keep.
+`completeLink` reads status with the poll secret in `pending`. Before the user has signed, it is `link_pending`. The verifier checks the app receipt, and the SDK checks that it binds `appUser`, the nonce and the issuer you asked for. Clavis keeps no table of links: the mapping is yours to keep. A `pending` kept by 3.1.0 completes as a display-code link.
 
 ## Errors
 
@@ -386,6 +432,9 @@ Failures are `AppClientError`. It carries `code`, the HTTP `status`, and `apiErr
 | `invalid_app_user` | `appUser` is not 1 to 128 characters of text. Stopped before sending |
 | `link_pending` | The link has not been signed yet |
 | `link_mismatch` | The completed receipt is not a link, or binds another user, nonce or issuer |
+| `invalid_link_confirm` | `confirm` is neither `code` nor `return`, or a `return` link has no `returnUrl`. Stopped before sending |
+| `link_return_mismatch` | A `return` link was completed without this link's return (another `request_id`, no `return_code`), or Clavis refused the return code (`apiError` is `RETURN_CODE_REQUIRED` or `RETURN_CODE_MISMATCH`) |
+| `link_user_mismatch` | `appUser` is not the user the link was started for, or a `return` link was completed without `appUser` |
 | `timeout` | `waitForCompletion` reached its deadline |
 | `ledger_bundle_invalid` | The verifier refused the ledger proof bundle |
 | `network_error` | A fetch failed |

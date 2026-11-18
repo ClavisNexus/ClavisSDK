@@ -164,7 +164,7 @@ Layout and phase order are fixed. Colour, corner radius and font can be inherite
 
 ## Sign in with Clavis button
 
-The button that starts Sign in with Clavis from your page.
+The button that starts Sign in with Clavis, or Link your Clavis account, from your page.
 
 ```ts
 import { mountClavisButton } from "@clavis.nexus/app-shell";
@@ -184,8 +184,24 @@ mountClavisButton(document.querySelector<HTMLElement>("#clavis-sign-in")!, {
 
 `start` calls your server and returns the authorization URL from `beginSignIn` ([`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app)). The button calls it when pressed, and not before.
 
+For an app that keeps its own sign-in, `kind: "link"` is the Link your Clavis account button. `start` returns the `consumeUrl` from `registerLink` with `confirm: "return"`; the user goes to Connect in the same tab, types no code, and comes back to your `returnUrl`, where `completeLink` finishes the link ([`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app), Link your Clavis account). Put no code or code hint next to this button.
+
+```ts
+mountClavisButton(document.querySelector<HTMLElement>("#clavis-link")!, {
+  kind: "link",
+  tone: "secondary",
+  allowedHosts: ["api.clavis.nexus"],
+  async start() {
+    const res = await fetch("/api/clavis/link", { method: "POST", credentials: "same-origin" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return ((await res.json()) as { url: string }).url;
+  },
+});
+```
+
 | Option | Values |
 |--------|--------|
+| `kind` | `sign-in` (default), `link` |
 | `tone` | `primary` (ink fill), `secondary` (sheet with an ink rule) |
 | `theme` | `auto` (default, follows `prefers-color-scheme`), `light`, `dark` |
 | `width` | `content` (default, as wide as the label), `fluid` (fills the column) |
@@ -193,9 +209,10 @@ mountClavisButton(document.querySelector<HTMLElement>("#clavis-sign-in")!, {
 
 Colour, shape (a rectangle, corners 0, 44px high, no shadow), type, wording, the mark and the height are fixed. Put nothing else inside the button.
 
-| `en` | `ja` |
-|------|------|
-| Sign in with Clavis | Clavis でサインイン |
+| `kind` | `en` | `ja` |
+|--------|------|------|
+| `sign-in` | Sign in with Clavis | Clavis でサインイン |
+| `link` | Link your Clavis account | Clavis と連携 |
 
 The page loads nothing from Clavis: no script, frame or image, no cookie, nothing measured. The mark is inline SVG, and the label font comes with `button.css` from your own origin.
 
@@ -229,7 +246,7 @@ import { renderClavisButtonHtml } from "@clavis.nexus/app-shell";
 const html = `<div id="clavis-sign-in">${renderClavisButtonHtml({ tone: "primary", uiLocales: ["ja"] })}</div>`;
 ```
 
-`CLAVIS_BUTTON_TEXT` holds the wording for each language.
+`CLAVIS_BUTTON_TEXT` (sign-in) and `CLAVIS_LINK_BUTTON_TEXT` (link) hold the wording for each language.
 
 ## License
 

@@ -1,8 +1,13 @@
 import { ClavisButtonError, type ClavisButtonErrorCode } from "./errors.js";
 import { MARK_PATHS, MARK_VIEWBOX } from "./mark.generated.js";
 import { checkNavigationUrl, type NavigationRefusal } from "./navigation.js";
-import { CLAVIS_BUTTON_TEXT, resolveLocale, type ClavisButtonText, type HandoffLocale } from "./text.js";
+import { CLAVIS_BUTTON_TEXT, CLAVIS_LINK_BUTTON_TEXT, resolveLocale, type ClavisButtonText, type HandoffLocale } from "./text.js";
 
+/**
+ * `sign-in` is Sign in with Clavis; `link` is Link your Clavis account, for an app that keeps its own
+ * sign-in. Both take the viewer to Clavis in the same tab.
+ */
+export type ClavisButtonKind = "sign-in" | "link";
 /** `primary` is an ink fill; `secondary` is the sheet with an ink rule */
 export type ClavisButtonTone = "primary" | "secondary";
 /** `auto` follows `prefers-color-scheme` */
@@ -12,6 +17,8 @@ export type ClavisButtonWidth = "content" | "fluid";
 
 /** What the business chooses. Colour, shape, corners, type, wording, mark and height are fixed */
 export type ClavisButtonOptions = {
+  /** Default `sign-in` */
+  kind?: ClavisButtonKind;
   tone: ClavisButtonTone;
   /** Default `auto` */
   theme?: ClavisButtonTheme;
@@ -32,7 +39,8 @@ export type MountClavisButtonOptions = ClavisButtonOptions & {
   allowedHosts: readonly string[];
   /**
    * Called when the button is pressed, and not before. Call your own server and return the URL to
-   * open: the authorization URL from `beginSignIn`.
+   * open: the authorization URL from `beginSignIn`, or for `kind: "link"` the `consumeUrl` from
+   * `registerLink` with `confirm: "return"`.
    */
   start: () => Promise<string>;
   /** Defaults to `window.location.assign` */
@@ -51,6 +59,7 @@ export type ClavisButtonHandle = {
 
 type Node = { tag: string; svg?: boolean; attrs: Array<[string, string]>; children: Array<Node | string> };
 
+const KINDS: readonly ClavisButtonKind[] = ["sign-in", "link"];
 const TONES: readonly ClavisButtonTone[] = ["primary", "secondary"];
 const THEMES: readonly ClavisButtonTheme[] = ["light", "dark", "auto"];
 const WIDTHS: readonly ClavisButtonWidth[] = ["content", "fluid"];
@@ -61,17 +70,26 @@ function pick<T extends string>(value: T | undefined, allowed: readonly T[], fal
   return v;
 }
 
-type Resolved = { tone: ClavisButtonTone; theme: ClavisButtonTheme; width: ClavisButtonWidth; locale: HandoffLocale; text: ClavisButtonText };
+type Resolved = {
+  kind: ClavisButtonKind;
+  tone: ClavisButtonTone;
+  theme: ClavisButtonTheme;
+  width: ClavisButtonWidth;
+  locale: HandoffLocale;
+  text: ClavisButtonText;
+};
 
 function resolve(options: ClavisButtonOptions): Resolved {
   if (!options || typeof options !== "object") throw new TypeError("options required");
   const locale = resolveLocale(options.uiLocales);
+  const kind = pick(options.kind, KINDS, "sign-in", "kind");
   return {
+    kind,
     tone: pick(options.tone, TONES, undefined, "tone"),
     theme: pick(options.theme, THEMES, "auto", "theme"),
     width: pick(options.width, WIDTHS, "content", "width"),
     locale,
-    text: CLAVIS_BUTTON_TEXT[locale],
+    text: (kind === "link" ? CLAVIS_LINK_BUTTON_TEXT : CLAVIS_BUTTON_TEXT)[locale],
   };
 }
 
@@ -112,6 +130,7 @@ function tree(r: Resolved): Node {
         attrs: [
           ["type", "button"],
           ["class", "clavis-button"],
+          ["data-kind", r.kind],
           ["data-tone", r.tone],
         ],
         children: [mark, { tag: "span", attrs: [["class", "clavis-button-label"]], children: [r.text.label] }],
@@ -159,7 +178,7 @@ const START_URL_REFUSALS: Record<NavigationRefusal, [ClavisButtonErrorCode, (hos
 const asError = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 
 /**
- * Put the Sign in with Clavis button in `element` (its content is replaced, so markup from
+ * Put a Clavis button (Sign in with Clavis, or Link your Clavis account) in `element` (its content is replaced, so markup from
  * `renderClavisButtonHtml` can stand there until this runs). Nothing is sent before the button is
  * pressed; no cookie is set and nothing is measured.
  *
