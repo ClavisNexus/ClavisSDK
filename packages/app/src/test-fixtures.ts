@@ -143,9 +143,9 @@ export function jwksWith(...keys: Record<string, unknown>[]): string {
 }
 
 /** セッションの鍵（`wauthn-auth-jwt`）。id_token に署名する */
-export async function sessionSigner(kid = "clavis-wauthn-auth-jwt-test") {
+export async function sessionSigner(kid = "clavis-wauthn-auth-jwt-test", slot = "wauthn-auth-jwt") {
   const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const exported = await crypto.subtle.exportKey("jwk", pair.publicKey);
   const jwk = { kty: "EC" as const, crv: "P-256" as const, x: exported.x!, y: exported.y! };
-  return { kid, privateKey: pair.privateKey, jwksKey: await sealedJwksKey("wauthn-auth-jwt", kid, jwk) };
+  return { kid, privateKey: pair.privateKey, jwksKey: await sealedJwksKey(slot, kid, jwk) };
 }

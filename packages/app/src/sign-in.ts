@@ -4,7 +4,7 @@
  * and the PKCE verifier) are what the caller keeps on its server; only `state`, `nonce` and the
  * challenge go into the URL.
  *
- * The id_token is checked with the session key (slot `wauthn-auth-jwt`) of the aggregate JWKS, which
+ * The id_token is checked with a sign-in key in the aggregate JWKS, which
  * the verifier checks against `trustRoot`, the same trust root receipts use. Clavis's refusals come
  * back as two codes: `declined` (the user stopped, or did not get through) and `unavailable`
  * (sign-in is not open to this app now, and refusals of the code exchange and the refresh).
@@ -13,8 +13,8 @@ import { decodeProtectedHeader, errors as joseErrors, importJWK, jwtVerify, type
 import { bytesToBase64Url } from "./base64url.js";
 import { AppClientError } from "./errors.js";
 
-/** The slot of the aggregate JWKS whose key signs id_tokens */
-export const SIGN_IN_KEY_SLOT = "wauthn-auth-jwt";
+/** Trusted JWKS slots during the transition to the dedicated ID token key. */
+export const SIGN_IN_KEY_SLOTS = ["oidc-id-token", "wauthn-auth-jwt"] as const;
 
 /** Scopes to ask for besides `openid`, which is always asked for */
 export const SIGN_IN_SCOPES = ["profile", "org.role"] as const;
@@ -245,7 +245,7 @@ export type IdTokenExpect = {
   sub?: string;
   /** The access token issued with it, for `at_hash` */
   accessToken: string;
-  /** The session key for `kid`, from the aggregate JWKS that chains to the trust root, or null */
+  /** The sign-in key for `kid`, from the aggregate JWKS that chains to the trust root, or null */
   key: (kid: string) => Promise<JsonWebKey | null>;
 };
 
@@ -260,7 +260,7 @@ function joseReason(e: unknown): string {
   return "malformed";
 }
 
-/** Check the id_token: ES256 under the session key, `iss`, `aud` (the app's ID alone), `exp`, `iat`, `nonce`, `sub` and `at_hash` */
+/** Check the id_token: ES256 under a sign-in key, `iss`, `aud` (the app's ID alone), `exp`, `iat`, `nonce`, `sub` and `at_hash` */
 export async function verifyIdToken(idToken: string, expect: IdTokenExpect): Promise<{ sub: string; name?: string }> {
   let header: ReturnType<typeof decodeProtectedHeader>;
   try {

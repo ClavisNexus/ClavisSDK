@@ -184,11 +184,11 @@ function normalizeApiOrigin(raw: string): string {
 /** A key of the aggregate JWKS whose sealer signature the verifier checked against `trustRoot` */
 export type TrustedKey = { kid: string; slot: string; alg: string; jwk: JsonWebKey };
 
-/** The verifier, and the keys of the aggregate JWKS it checked. The SDK reads the session key (`wauthn-auth-jwt`) for sign-in from here */
+/** The verifier, and the keys of the aggregate JWKS it checked. The SDK reads sign-in keys from here */
 export type VerifierWithKeys = {
   verifier: Verifier;
-  /** The key `kid` in slot `slot`, from the aggregate JWKS that chains to `trustRoot`. A kid the copy in hand lacks fetches the JWKS once more (at most once a minute); still missing, null */
-  trustedKey: (kid: string, slot: string) => Promise<TrustedKey | null>;
+  /** The key `kid` in an allowed slot, from the aggregate JWKS that chains to `trustRoot`. A kid the copy in hand lacks fetches the JWKS once more (at most once a minute); still missing, null */
+  trustedKey: (kid: string, slots: readonly string[]) => Promise<TrustedKey | null>;
 };
 
 export function createVerifier(opts: CreateVerifierOptions): Verifier {
@@ -421,13 +421,13 @@ export function createVerifierWithKeys(opts: CreateVerifierOptions): VerifierWit
     return keys;
   }
 
-  async function trustedKey(kid: string, slot: string): Promise<TrustedKey | null> {
-    const found = (await keysInHand()).find((k) => k.kid === kid && k.slot === slot) ?? null;
+  async function trustedKey(kid: string, slots: readonly string[]): Promise<TrustedKey | null> {
+    const found = (await keysInHand()).find((k) => k.kid === kid && slots.includes(k.slot)) ?? null;
     if (found || Date.now() - refreshedAt <= 60_000) return found;
     // A kid the copy in hand lacks may be a key added since: fetch once more
     refreshedAt = Date.now();
     surface.invalidate();
-    return (await keysInHand()).find((k) => k.kid === kid && k.slot === slot) ?? null;
+    return (await keysInHand()).find((k) => k.kid === kid && slots.includes(k.slot)) ?? null;
   }
 
   return {

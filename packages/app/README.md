@@ -265,7 +265,7 @@ async function callback(request: Request, take: () => Promise<PendingSignIn>) {
 
 `redirectUri` is one of the app's redirect paths in developers, as an https URL under the app's host. `beginSignIn` sends nothing. `pending` holds `state`, `nonce` and the PKCE code verifier. Keep it in your server-side session, not in a URL or in a cookie the browser can read, and delete it once `completeSignIn` has used it. The URL carries only `state`, `nonce` and the code challenge.
 
-`completeSignIn` takes the URL the user came back on, or its query. It checks `state`, exchanges the code with the verifier, and checks the id_token: ES256 under the session key (slot `wauthn-auth-jwt`) of the aggregate JWKS that chains to `trustRoot`, `iss` (`apiOrigin`), `aud` (`appId`, alone), `nonce`, `exp`, `iat` (issued within the last 5 minutes) and `at_hash`.
+`completeSignIn` takes the URL the user came back on, or its query. It checks `state`, exchanges the code with the verifier, and checks the id_token: ES256 under a sign-in key (slot `oidc-id-token` or `wauthn-auth-jwt`) of the aggregate JWKS that chains to `trustRoot`, `iss` (`apiOrigin`), `aud` (`appId`, alone), `nonce`, `exp`, `iat` (issued within the last 5 minutes) and `at_hash`.
 
 `sub` is the user's ID in this app. Pass it as `allowedSub` when you register a signature request or a delegation, and only that person can sign. It is the `sub` a completion returns. Key accounts by `iss` and `sub` together.
 
@@ -298,7 +298,7 @@ await app.revokeSignIn(refreshToken, { tokenTypeHint: "refresh_token" });
 const signOut = app.endSessionUrl({ postLogoutRedirectUri: "https://console.example/signed-out", idTokenHint: tokens.idToken });
 ```
 
-`refreshSignIn` checks the new id_token as above and that it names the same `sub`. A refused refresh (the user revoked the app from their Clavis account, or the session ended) is `unavailable`. Your own session is yours to end. `endSessionUrl` builds the URL that signs the user out of Clavis's sign-in screen; nothing is sent.
+`refreshSignIn` checks the new id_token as above and that it names the same `sub`. A refused refresh (the user revoked the app from their Clavis account, or the session ended) is `unavailable`. End your app session before redirecting to the URL from `endSessionUrl`. The user can confirm sign-out on Clavis and return to your registered URL. They can also close the page.
 
 ## Link your Clavis account
 
