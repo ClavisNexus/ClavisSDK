@@ -52,7 +52,7 @@ import {
   parseOrgMembership,
   parseTokenResponse,
   readSignInCallback,
-  SIGN_IN_KEY_SLOT,
+  SIGN_IN_KEY_SLOTS,
   verifyIdToken,
   type BeginSignInInput,
   type BeginSignInResult,
@@ -436,7 +436,7 @@ export type AppClient = {
   refreshSignIn: (input: RefreshSignInInput) => Promise<SignIn>;
   /** Revoke an access token or a refresh token. Revoking either ends the refresh tokens of that sign-in */
   revokeSignIn: (token: string, options?: RevokeSignInOptions) => Promise<void>;
-  /** The URL that signs the user out of Clavis's sign-in screen and sends them to `postLogoutRedirectUri`. Nothing is sent */
+  /** Build the Clavis sign-out URL. End your app session before redirecting. The user can confirm sign-out and return to the registered URL. */
   endSessionUrl: (input?: EndSessionUrlInput) => string;
   /** The user's role in the Org that owns this app, read with the access token of a sign-in that asked for `org.role` */
   orgMembership: (accessToken: string, options?: SignInCallOptions) => Promise<OrgMembership>;
@@ -1305,9 +1305,9 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     return view;
   }
 
-  /** The session key (`wauthn-auth-jwt`) for `kid`, from the aggregate JWKS the verifier checked against trustRoot */
-  async function sessionKey(kid: string): Promise<JsonWebKey | null> {
-    const key = await trustedKey(kid, SIGN_IN_KEY_SLOT);
+  /** The verified sign-in key for `kid`, from the aggregate JWKS the verifier checked against trustRoot */
+  async function signInKey(kid: string): Promise<JsonWebKey | null> {
+    const key = await trustedKey(kid, SIGN_IN_KEY_SLOTS);
     return key && key.alg === "ES256" ? key.jwk : null;
   }
 
@@ -1348,7 +1348,7 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
       issuer,
       appId,
       accessToken: tokens.accessToken,
-      key: sessionKey,
+      key: signInKey,
       ...(expect.nonce !== undefined ? { nonce: expect.nonce } : {}),
       ...(expect.sub !== undefined ? { sub: expect.sub } : {}),
     });

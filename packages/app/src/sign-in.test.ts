@@ -21,7 +21,8 @@ const APP_ID = APP_STATEMENT.app;
 const VERIFIERS = await vectorVerifiers();
 const SESSION = await sessionSigner();
 /** 見本の集約 JWKS に、封印者が署名したセッションの鍵を足したもの */
-const JWKS = jwksWith(SESSION.jwksKey);
+const ID_TOKEN = await sessionSigner("clavis-oidc-id-token-test", "oidc-id-token");
+const JWKS = jwksWith(SESSION.jwksKey, ID_TOKEN.jwksKey);
 const REDIRECT = "https://app.example/auth/clavis/callback";
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -281,6 +282,12 @@ describe("the id_token", () => {
     expect(String((error as Error).message)).toContain(`(${reason})`);
   }
 
+  it("accepts an ID token signed by the dedicated key while the session key is still published", async () => {
+    const { client, begin } = await harness([{ signing: { key: ID_TOKEN.privateKey, kid: ID_TOKEN.kid } }]);
+    const { pending, callback } = await begin();
+    expect((await client.completeSignIn(callback, pending)).sub).toBe(PAIRWISE);
+  });
+
   it("refuses one whose signature was tampered with", async () => {
     const { client, begin } = await harness([
       {
@@ -316,7 +323,7 @@ describe("the id_token", () => {
     await refused({ claims: { at_hash: await atHash("another-access-token") } }, "at_hash");
   });
 
-  it("refuses a key outside the session slot of the JWKS that chains to the trust root", async () => {
+  it("refuses a key outside the sign-in slots of the JWKS that chains to the trust root", async () => {
     // 集約 JWKS にない鍵
     const stray = await generateKeyPair("ES256");
     await refused({ signing: { key: stray.privateKey as CryptoKey, kid: "clavis-wauthn-auth-jwt-zzzz" } }, "kid");
