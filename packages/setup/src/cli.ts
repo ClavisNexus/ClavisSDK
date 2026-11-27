@@ -1,4 +1,5 @@
 import { appRegionsFromArgs, cardCheckoutOptionsFromArgs, flag, orgCreationTermsFromArgs, positionals } from "./cli-args.js";
+import { readFile } from "node:fs/promises";
 import { createSetupClient } from "./setup-client.js";
 import { redactForTransport } from "./redact-transport.js";
 
@@ -18,11 +19,21 @@ function usage(): never {
   clavis policy-bootstrap <orgId>
   clavis incorporation-set <orgId> --incorporation CODE --accept-customer-terms
   clavis card-checkout <orgId> --consent-billing-data [--offer meter|bundle] [--lang en|ja]
-  clavis app-register --org O --host H --name N [--redirect /done]
+  clavis app-register --org O --host H --name N [--redirect /done] [--agreements]
   clavis app-host-plan <orgId> <appId>
   clavis app-verify-host <orgId> <appId>
   clavis app-regions-set <orgId> <appId> (--regions JP,US | --all)
   clavis declaration-set --org O --app A --end-users TEXT --use signature=OP
+  clavis app-lex-document <orgId> <appId> --url U
+  clavis app-lex-profile-set <orgId> <appId> (--file profile.json | --clear)
+  clavis lex-counts <orgId> [--query-file query.json]
+  clavis lex-export <orgId> --request-file request.json
+  clavis lex-exports <orgId>
+  clavis lex-export-status <orgId> <jobId>
+  clavis lex-export-download <orgId> <jobId> --dir D
+  clavis lex-decision <orgId> <decisionId>
+  clavis lex-subject-decisions <orgId> <subject>
+  clavis lex-subject-erase <orgId> <subject>
   clavis emit-env --app A
 
 login: opens developers /setup/login, then paste the JSON from the page (or pass --bridge-json-file).
@@ -34,11 +45,23 @@ incorporation-set declares the place again after the Customer Terms change (stat
 card-checkout needs --consent-billing-data: the customer's consent to provide billing data to the payment provider. Run it once without the flag to get the statement to show them.
 Secrets stay in ~/.config/clavis/apps/<appId>/ (mode 0600). Command output includes the file path. emit-env needs CLAVIS_TRUST_ROOT set to the Clavis Master public JWK (docs.clavis.nexus); it checks that the trust documents chain to it before writing CLAVIS_TRUST_ROOT for @clavis.nexus/app.
 app-regions-set chooses where the App accepts new connections from: JP, US, GB, EEA (comma-separated). --all accepts every region Clavis accepts. People already connected keep using the App.
+app-lex-document has Clavis take a snapshot of the org's terms or privacy notice (from the App's confirmed host or the org's domain); put the sha256 it returns in the profile's documents. app-lex-profile-set sets what Connect shows when the App asks for an agreement, with Passkey (--clear removes it).
+lex-export starts an export of agreement records: request.json is { "kind": "decisions" | "subject", "query": {...}, "expiring_within_days"?: N, "records"?: true }. Many people's records (decisions) need Passkey; one person's (subject, with query.subject_ref) does not. lex-export-download writes the files at mode 0600 under D/<jobId>/ after checking each against the manifest and the manifest against the digest anchored on the ledger.
+lex-decision reads one agreement decision by the decision_id your App received. lex-subject-decisions lists every decision for one person (subject is their ID in your App). lex-subject-erase erases that person's decisions now, with Passkey; it cannot be undone and is held while the records are under a hold.
 declaration-set replaces the App's current declaration. Pass every use to keep. status reports the signature card and the place of incorporation. Ledger subscription is on developers.
 
 Env: CLAVIS_API_ORIGIN CLAVIS_ID_ORIGIN CLAVIS_DEVELOPERS_ORIGIN CLAVIS_SESSION_PATH
 `);
   process.exit(2);
+}
+
+async function readJsonFile(path: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch (e) {
+    console.error(`could not read JSON from ${path}: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(2);
+  }
 }
 
 function requireFlag(args: string[], name: string): string {
@@ -140,6 +163,7 @@ async function main(): Promise<void> {
           orgId: requireFlag(rest, "--org"),
           host: requireFlag(rest, "--host"),
           displayName: requireFlag(rest, "--name"),
+          intentTypes: rest.includes("--agreements") ? ["generic_sign", "agreement"] : undefined,
           redirectPaths: flag(rest, "--redirect") ? [flag(rest, "--redirect")!] : undefined,
         }),
       );
@@ -180,6 +204,73 @@ async function main(): Promise<void> {
           uses: [{ capability, operation }],
         }),
       );
+      return;
+    }
+    case "app-lex-document": {
+      const [orgId, appId] = positionals(rest, ["--url"]);
+      if (!orgId || !appId) usage();
+      printJson(await client.appLexDocument({ orgId, appId, url: requireFlag(rest, "--url") }));
+      return;
+    }
+    case "app-lex-profile-set": {
+      const [orgId, appId] = positionals(rest, ["--file"]);
+      if (!orgId || !appId) usage();
+      const clear = rest.includes("--clear");
+      const file = flag(rest, "--file");
+      if (clear === Boolean(file)) {
+        console.error("pass either --file or --clear");
+        usage();
+      }
+      printJson(await client.appLexProfileSet({ orgId, appId, profile: clear ? null : await readJsonFile(file!) }));
+      return;
+    }
+    case "lex-counts": {
+      const [orgId] = positionals(rest, ["--query-file"]);
+      if (!orgId) usage();
+      const file = flag(rest, "--query-file");
+      printJson(await client.lexCounts({ orgId, query: file ? await readJsonFile(file) : {} }));
+      return;
+    }
+    case "lex-export": {
+      const [orgId] = positionals(rest, ["--request-file"]);
+      if (!orgId) usage();
+      printJson(await client.lexExport({ orgId, request: await readJsonFile(requireFlag(rest, "--request-file")) }));
+      return;
+    }
+    case "lex-exports": {
+      const [orgId] = rest;
+      if (!orgId) usage();
+      printJson(await client.lexExports({ orgId }));
+      return;
+    }
+    case "lex-export-status": {
+      const [orgId, jobId] = rest;
+      if (!orgId || !jobId) usage();
+      printJson(await client.lexExportStatus({ orgId, jobId }));
+      return;
+    }
+    case "lex-export-download": {
+      const [orgId, jobId] = positionals(rest, ["--dir"]);
+      if (!orgId || !jobId) usage();
+      printJson(await client.lexExportDownload({ orgId, jobId, dir: requireFlag(rest, "--dir") }));
+      return;
+    }
+    case "lex-decision": {
+      const [orgId, decisionId] = rest;
+      if (!orgId || !decisionId) usage();
+      printJson(await client.lexDecision({ orgId, decisionId }));
+      return;
+    }
+    case "lex-subject-decisions": {
+      const [orgId, subject] = rest;
+      if (!orgId || !subject) usage();
+      printJson(await client.lexSubjectDecisions({ orgId, subject }));
+      return;
+    }
+    case "lex-subject-erase": {
+      const [orgId, subject] = rest;
+      if (!orgId || !subject) usage();
+      printJson(await client.lexSubjectErase({ orgId, subject }));
       return;
     }
     case "emit-env":

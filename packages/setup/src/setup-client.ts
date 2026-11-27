@@ -29,6 +29,7 @@ import {
   orgAppVerifyHostStatement,
   orgCardCheckoutStatement,
   orgCardIncorporationStatement,
+  orgLexSubjectEraseStatement,
   orgPolicyBootstrapStatement,
   sameStatement,
   type Statement,
@@ -41,6 +42,9 @@ import {
   startCeremony,
 } from "./ceremony.js";
 import { emitAppEnv } from "./emit-env.js";
+import { dirname, join } from "node:path";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { bytesToBase64Url } from "./base64url.js";
 import { saveOperatePrivateJwk, readOperatePrivateJwk } from "./operate-key-store.js";
 import { generateOperateKeyPair } from "./keys.js";
 import { loginWithBrowser } from "./login.js";
@@ -175,6 +179,43 @@ export type SetupClient = {
     appId: string;
     regions: readonly string[] | null;
   }): Promise<SetupResult<{ accepted_regions: AppRegion[] | null; unchanged?: true }>>;
+  /**
+   * Have Clavis take a snapshot of the org's terms or privacy notice, from the app's confirmed host or the org's
+   * domain. The agreement profile names the document by the snapshot's SHA-256
+   */
+  appLexDocument(args: { orgId: string; appId: string; url: string }): Promise<SetupResult<Record<string, unknown>>>;
+  /**
+   * Set the app's agreement profile (what Connect shows when the app asks for an agreement), or clear it with null,
+   * with a passkey. Clavis reads and normalises the profile, and tells this tool what to sign
+   */
+  appLexProfileSet(args: { orgId: string; appId: string; profile: unknown }): Promise<SetupResult<{ app_id: string; lex_profile: unknown }>>;
+  /** How many agreement decisions a query matches, by outcome, stop reason and pack */
+  lexCounts(args: { orgId: string; query?: unknown }): Promise<SetupResult<Record<string, unknown>>>;
+  /**
+   * Start an export of agreement decisions. Many people's decisions (`kind: "decisions"`) need an owner's or admin's
+   * passkey over the request; one person's (`kind: "subject"`) does not
+   */
+  lexExport(args: { orgId: string; request: unknown }): Promise<SetupResult<{ job: Record<string, unknown> }>>;
+  lexExports(args: { orgId: string }): Promise<SetupResult<{ jobs: unknown[] }>>;
+  lexExportStatus(args: { orgId: string; jobId: string }): Promise<SetupResult<{ job: Record<string, unknown>; anchor?: unknown }>>;
+  /**
+   * Fetch a finished export into `dir/<jobId>/` (files at mode 0600: they hold people's records), checking each file
+   * against the manifest's digest and the manifest against the digest in the authenticated status
+   */
+  lexExportDownload(args: {
+    orgId: string;
+    jobId: string;
+    dir: string;
+  }): Promise<SetupResult<{ dir: string; manifest_digest: string; files: { path: string; bytes: number }[] }>>;
+  /** One agreement decision: its record, its ledger proof and where it stands now (`lifecycle`) */
+  lexDecision(args: { orgId: string; decisionId: string }): Promise<SetupResult<Record<string, unknown>>>;
+  /** Every agreement decision the org holds for one person (their ID in the org's apps), to answer that person's request */
+  lexSubjectDecisions(args: { orgId: string; subject: string }): Promise<SetupResult<Record<string, unknown>>>;
+  /**
+   * Erase one person's agreement decisions now, with an owner's or admin's passkey: the org's instruction, for that
+   * person's erasure request. The ledger leaves stay and no longer lead to anything. It cannot be undone
+   */
+  lexSubjectErase(args: { orgId: string; subject: string }): Promise<SetupResult<{ erased: number; decision_ids: string[] }>>;
   emitEnv(args: {
     appId: string;
     operatePrivateJwkJson?: string;
@@ -189,6 +230,40 @@ export type SetupClient = {
 };
 
 type RequireSession = { session: DevelopersSession; origins: SetupOrigins };
+
+/** A person's ID in the org's apps, as Clavis takes it */
+const LEX_SUBJECT = /^[A-Za-z0-9._:-]{1,128}$/;
+const LEX_DECISION_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/** The paths a finished export holds (the manifest names them) */
+const LEX_EXPORT_PATH = /^(manifest\.json|anchor\.json|items\/\d{5}\.jsonl|decisions\/[A-Za-z0-9._:-]{1,128}\.json)$/;
+
+async function bytesDigest(bytes: Uint8Array): Promise<string> {
+  return `sha256:${bytesToBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))))}`;
+}
+
+/** Turn the API's reasons for refusing an agreement profile or an export into wording that says what happened. Anything else is null */
+function lexRefusal(e: unknown): { ok: false; error: string } | null {
+  if (!(e instanceof api.SetupApiError)) return null;
+  switch (e.code) {
+    case "PROFILE_INVALID":
+      return { ok: false, error: "profile_invalid — the agreement profile is incomplete (version, service_name, purposes, destinations and terminal_categories are required)." };
+    case "DOCUMENT_NOT_SNAPSHOTTED":
+      return { ok: false, error: "document_not_snapshotted — run app-lex-document for each document in the profile first, and use the sha256 it returns." };
+    case "EXPORT_RUNNING":
+      return { ok: false, error: "export_running — another export of this organisation is running. Wait for it, then start again." };
+    case "EXPORT_TOO_LARGE":
+      return { ok: false, error: "export_too_large — more decisions match than one export holds. Narrow the period (query.from, query.to) and start again." };
+    case "FORBIDDEN":
+      return { ok: false, error: "forbidden — only an owner or admin of the Org can do this." };
+    case "NOT_FOUND":
+      return { ok: false, error: "not_found — the Org, the App, the export or the decision was not found, or this is not open to the Org yet." };
+    case "ORG_HOLD":
+      return { ok: false, error: "org_hold — these records are preserved under a hold, so erasure waits until the hold ends. Nothing was erased." };
+    default:
+      return null;
+  }
+}
 
 /** The saved session and the origins it was saved with (`saveSession` always writes both) */
 async function requireSession(sessionPath?: string): Promise<SetupResult<RequireSession>> {
@@ -767,6 +842,207 @@ export function createSetupClient(options: CreateSetupClientOptions = {}): Setup
         return { ok: true, data: { accepted_regions: regions } };
       } catch (e) {
         const refusal = appRegionsRefusal(e, regions ?? []);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async appLexDocument(args) {
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      try {
+        return { ok: true, data: await api.postAppLexDocument(auth.data.origins.apiOrigin, auth.data.session.accessToken, args.orgId, args.appId, args.url) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async appLexProfileSet(args) {
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      const apiOrigin = auth.data.origins.apiOrigin;
+      const bearer = auth.data.session.accessToken;
+      try {
+        const prepared = await api.postAppLexProfileStatement(apiOrigin, bearer, args.orgId, args.appId, args.profile);
+        const cer = await runPasskeyCeremony({
+          origins: auth.data.origins,
+          bearer,
+          statement: prepared.statement as Statement,
+          displayHint: args.profile === null ? "Clear the App's agreement profile" : "Set the App's agreement profile",
+          openBrowserFlag,
+        });
+        const proof = await cer.wait();
+        return { ok: true, data: await api.putAppLexProfile(apiOrigin, bearer, args.orgId, args.appId, { profile: args.profile, receipt: proof }) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexCounts(args) {
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      try {
+        return { ok: true, data: await api.postLexDecisionCounts(auth.data.origins.apiOrigin, auth.data.session.accessToken, args.orgId, args.query ?? {}) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexExport(args) {
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      const apiOrigin = auth.data.origins.apiOrigin;
+      const bearer = auth.data.session.accessToken;
+      try {
+        const prepared = await api.postLexExportStatement(apiOrigin, bearer, args.orgId, args.request);
+        let receipt: Receipt | undefined;
+        if (prepared.statement) {
+          const cer = await runPasskeyCeremony({
+            origins: auth.data.origins,
+            bearer,
+            statement: prepared.statement as Statement,
+            displayHint: "Export the organisation's agreement records",
+            openBrowserFlag,
+          });
+          receipt = await cer.wait();
+        }
+        return { ok: true, data: await api.postLexExport(apiOrigin, bearer, args.orgId, { request: args.request, ...(receipt ? { receipt } : {}) }) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexExports(args) {
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      try {
+        return { ok: true, data: await api.getLexExports(auth.data.origins.apiOrigin, auth.data.session.accessToken, args.orgId) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexExportStatus(args) {
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      try {
+        return { ok: true, data: await api.getLexExport(auth.data.origins.apiOrigin, auth.data.session.accessToken, args.orgId, args.jobId) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexExportDownload(args) {
+      if (!/^[0-9a-f]{32}$/.test(args.jobId)) return { ok: false, error: "job_id_invalid" };
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      const apiOrigin = auth.data.origins.apiOrigin;
+      const bearer = auth.data.session.accessToken;
+      try {
+        const { job } = await api.getLexExport(apiOrigin, bearer, args.orgId, args.jobId);
+        if (job.state !== "done" || typeof job.manifest_digest !== "string") {
+          return { ok: false, error: `export_not_done — the export is ${String(job.state)}. Check again with lex-export-status.` };
+        }
+        const manifestBytes = await api.getLexExportFile(apiOrigin, bearer, args.orgId, args.jobId, "manifest.json");
+        if ((await bytesDigest(manifestBytes)) !== job.manifest_digest) {
+          return { ok: false, error: "export_manifest_mismatch — the manifest does not hash to the digest Clavis anchored. Nothing was kept." };
+        }
+        const manifest = JSON.parse(new TextDecoder().decode(manifestBytes));
+        if (manifest?.kind !== "lex.package@1" || manifest.job_id !== args.jobId || !Array.isArray(manifest.files)) {
+          return { ok: false, error: "invalid_export_manifest" };
+        }
+        const files: { path: string; bytes: number }[] = [];
+        const seen = new Set(["manifest.json", "anchor.json"]);
+        await mkdir(args.dir, { recursive: true, mode: 0o700 });
+        const staging = await mkdtemp(join(args.dir, ".clavis-export-"));
+        const store = async (path: string, bytes: Uint8Array) => {
+          await mkdir(dirname(join(staging, path)), { recursive: true, mode: 0o700 });
+          await writeFile(join(staging, path), bytes, { flag: "wx", mode: 0o600 });
+          files.push({ path, bytes: bytes.byteLength });
+        };
+        try {
+          await store("manifest.json", manifestBytes);
+          for (const entry of manifest.files) {
+            if (typeof entry?.path !== "string" || !LEX_EXPORT_PATH.test(entry.path) || seen.has(entry.path)) {
+              return { ok: false, error: "invalid_export_manifest" };
+            }
+            seen.add(entry.path);
+            const bytes = await api.getLexExportFile(apiOrigin, bearer, args.orgId, args.jobId, entry.path);
+            if (bytes.byteLength !== entry.bytes || (await bytesDigest(bytes)) !== entry.sha256) {
+              return { ok: false, error: `export_file_mismatch — ${entry.path} differs from the manifest.` };
+            }
+            await store(entry.path, bytes);
+          }
+          await store("anchor.json", await api.getLexExportFile(apiOrigin, bearer, args.orgId, args.jobId, "anchor.json"));
+          const root = join(args.dir, args.jobId);
+          await rename(staging, root);
+          return { ok: true, data: { dir: root, manifest_digest: job.manifest_digest, files } };
+        } finally {
+          await rm(staging, { recursive: true, force: true });
+        }
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexDecision(args) {
+      if (!LEX_DECISION_ID.test(args.decisionId)) return { ok: false, error: "decision_id_invalid — pass the decision_id Clavis returned for the agreement." };
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      try {
+        return { ok: true, data: await api.getLexDecision(auth.data.origins.apiOrigin, auth.data.session.accessToken, args.orgId, args.decisionId) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexSubjectDecisions(args) {
+      if (!LEX_SUBJECT.test(args.subject)) return { ok: false, error: "subject_invalid — pass the person's ID in your App (the sub you passed as allowedSub)." };
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      try {
+        return { ok: true, data: await api.getLexSubjectDecisions(auth.data.origins.apiOrigin, auth.data.session.accessToken, args.orgId, args.subject) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
+        if (refusal) return refusal;
+        throw e;
+      }
+    },
+
+    async lexSubjectErase(args) {
+      if (!LEX_SUBJECT.test(args.subject)) return { ok: false, error: "subject_invalid — pass the person's ID in your App (the sub you passed as allowedSub)." };
+      const auth = await requireSession(sessionPath);
+      if (!auth.ok) return auth;
+      const apiOrigin = auth.data.origins.apiOrigin;
+      const bearer = auth.data.session.accessToken;
+      try {
+        const cer = await runPasskeyCeremony({
+          origins: auth.data.origins,
+          bearer,
+          statement: orgLexSubjectEraseStatement({ org: args.orgId, subject: args.subject }),
+          displayHint: "Erase one person's agreement records",
+          openBrowserFlag,
+        });
+        const proof = await cer.wait();
+        return { ok: true, data: await api.postLexSubjectErase(apiOrigin, bearer, args.orgId, args.subject, proof) };
+      } catch (e) {
+        const refusal = lexRefusal(e);
         if (refusal) return refusal;
         throw e;
       }

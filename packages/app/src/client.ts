@@ -2,12 +2,25 @@ import { SignJWT, importJWK, type JWK, type JWTPayload } from "jose";
 import {
   APP_INTENT_REGISTRATION_AUD,
   appIntentRegistrationIssuer,
+  buildAgreementClaims,
   buildGenericSignClaims,
   buildMandateClaims,
   REGISTER_TTL_MAX_SEC,
   REGISTER_TTL_MIN_SEC,
   REGISTER_TTL_SEC,
 } from "./claims.js";
+import {
+  agreementStatusFrom,
+  checkAgreementInput,
+  parseAgreementState,
+  type AgreementAgeBand,
+  type AgreementAgeMethod,
+  type AgreementCeremony,
+  type AgreementState,
+  type AgreementStatusCompleted,
+  type AgreementUseCase,
+  type ExpectedAgreement,
+} from "./agreement.js";
 import { canonicalStringify } from "./canonical-json.js";
 import { digestOf } from "./digest.js";
 import { AppClientError, type AppClientErrorCode, type AppClientErrorDetails } from "./errors.js";
@@ -349,6 +362,49 @@ export type WebhookPing = {
   state: "completed";
 };
 
+export type RegisterAgreementInput = {
+  /** The step the user agrees to (`tos`, `privacy_ack`, `marketing`, …). Clavis builds what the user is shown from the app's profile in developers */
+  useCase: AgreementUseCase;
+  /** Omitted, `grant`. `reconsent` asks again on changed terms; `withdraw` ends an agreement in force. A decline is the user's answer, not a ceremony */
+  ceremony?: AgreementCeremony;
+  /** The user's ID in this app (the same value as the OIDC `sub`). With it, only this person can answer */
+  allowedSub?: string;
+  /** The user's age band, when the app knows it. Omitted, the user states it on Connect */
+  ageBand?: AgreementAgeBand;
+  /** What `ageBand` rests on, recorded as the app's statement. Only with `ageBand` */
+  ageMethod?: AgreementAgeMethod;
+  /** Have the user state their age band even when `ageBand` is given */
+  ageAssertionRequired?: boolean;
+  /** Where to send the user after answering: https under the app's confirmed host */
+  returnUrl?: string;
+  webhookUrl?: string;
+  /** The language of the screen on Connect, in order of preference */
+  uiLocales?: readonly string[];
+  /** How long the request lives, in seconds (60–900) */
+  ttlSeconds?: number;
+  signal?: AbortSignal;
+};
+
+export type RegisterAgreementResult = RegisterResult & {
+  /** The agreement you asked for. Pass it when you read the decision */
+  agreement: ExpectedAgreement;
+};
+
+export type AgreementStatus = IntentStatusPending | IntentStatusIssued | AgreementStatusCompleted;
+
+export type WaitForAgreementOptions = Omit<WaitForCompletionOptions, "expectedMessageDigest" | "expectedOnBehalf">;
+
+export type AgreementStateInput = {
+  /** The purpose this operation uses. Omit to check every purpose for the step. */
+  purposeId?: string;
+  /** The user's ID in this app */
+  sub: string;
+  useCase: AgreementUseCase;
+  signal?: AbortSignal;
+};
+
+export type { AgreementState, AgreementStatusCompleted, ExpectedAgreement };
+
 export type { CommitLedgerInput, FinishLedgerHandoffOptions, LedgerEvidence, LedgerHandoff };
 
 export type SignInCallOptions = { signal?: AbortSignal };
@@ -378,6 +434,24 @@ export type EndSessionUrlInput = {
 
 export type AppClient = {
   registerGenericSign: (input: RegisterGenericSignInput) => Promise<RegisterResult>;
+  /** Ask a user to agree to a step on Connect. Send the user to `consumeUrl`, then read the decision with `waitForAgreement` */
+  registerAgreement: (input: RegisterAgreementInput) => Promise<RegisterAgreementResult>;
+  /** Read an agreement request once. A completed grant or reconsent carries its app receipt, which the verifier has checked */
+  getAgreementStatus: (requestId: string, pollSecret: string, expected: ExpectedAgreement, options?: { signal?: AbortSignal }) => Promise<AgreementStatus>;
+  /** Read an agreement request until the user has answered */
+  waitForAgreement: (
+    requestId: string,
+    pollSecret: string,
+    expected: ExpectedAgreement,
+    options?: WaitForAgreementOptions,
+  ) => Promise<AgreementStatusCompleted>;
+  /** Whether an agreement is in force for this user and step, and whether it was given on today's terms */
+  agreementState: (input: AgreementStateInput) => Promise<AgreementState>;
+  /**
+   * The gate before an action that rests on an agreement: returns the agreement in force, or throws `agreement_required`
+   * (the error's `agreement` is `none` or `reconsent_required`). Ask with `registerAgreement` and try again
+   */
+  requireAgreement: (input: AgreementStateInput) => Promise<Extract<AgreementState, { state: "open" }>>;
   /** Submit the leaf and return the handoff, which carries the opening. The salt is not sent. */
   commitLedger: (input: CommitLedgerInput) => Promise<LedgerHandoff>;
   /** Add the handoff's opening to the proof bundle (`ledger.bundle@1`), which carries the checkpoint, have the verifier check it, and return it. */
@@ -980,7 +1054,8 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     return { ...result, mandate: { id, terms, ...(onBehalfDomain ? { onBehalf: { domain: onBehalfDomain } } : {}) } };
   }
 
-  async function readStatus(requestId: string, pollSecret: string, signal?: AbortSignal): Promise<StatusRead> {
+  /** The status body of a request, for this request */
+  async function readStatusPayload(requestId: string, pollSecret: string, signal?: AbortSignal): Promise<unknown> {
     if (!requestId.trim() || !pollSecret.trim()) {
       throw new AppClientError("invalid_status_args", "requestId and pollSecret required");
     }
@@ -996,7 +1071,11 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     }
     const payload = asRecord(body)?.payload;
     assertStatusRequestId(payload, requestId);
-    return parseStatusRead(payload);
+    return payload;
+  }
+
+  async function readStatus(requestId: string, pollSecret: string, signal?: AbortSignal): Promise<StatusRead> {
+    return parseStatusRead(await readStatusPayload(requestId, pollSecret, signal));
   }
 
   async function getStatus(
@@ -1035,6 +1114,104 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     const read = await readStatus(requestId, pollSecret, options?.signal);
     if (read.state !== "completed") return read;
     return mandateStatusFrom(read.intentType, await verifiedCompletion(verifier, read.receipt, requestId, appId), expected);
+  }
+
+  async function registerAgreement(input: RegisterAgreementInput): Promise<RegisterAgreementResult> {
+    const { useCase, ceremony } = checkAgreementInput(input);
+    const allowedSub = input.allowedSub === undefined ? undefined : input.allowedSub.trim();
+    if (allowedSub !== undefined && !SUBJECT_RE.test(allowedSub)) {
+      throw new AppClientError("invalid_allowed_sub", "allowedSub must be the user's ID in this App");
+    }
+    const uiLocales = normalizeUiLocales(input.uiLocales);
+    const ttl = checkedTtl(input.ttlSeconds);
+    const now = Math.floor(Date.now() / 1000);
+    const claims = buildAgreementClaims({
+      appId,
+      iat: now,
+      exp: now + ttl,
+      jti: crypto.randomUUID(),
+      useCase,
+      ceremony,
+      ...(input.ageBand !== undefined ? { ageBand: input.ageBand } : {}),
+      ...(input.ageMethod !== undefined ? { ageMethod: input.ageMethod } : {}),
+      ...(input.ageAssertionRequired !== undefined ? { ageAssertionRequired: input.ageAssertionRequired } : {}),
+      ...(allowedSub ? { allowedSub } : {}),
+      returnUrl: input.returnUrl,
+      webhookUrl: input.webhookUrl,
+      uiLocales,
+    });
+    const { result } = await postRegister(claims, input.signal);
+    return { ...result, agreement: { useCase, ceremony, ...(allowedSub ? { allowedSub } : {}) } };
+  }
+
+  function assertExpectedAgreement(expected: ExpectedAgreement): void {
+    try {
+      checkAgreementInput(expected ?? {});
+    } catch {
+      throw new AppClientError("invalid_status_args", "expected must be the agreement returned by registerAgreement");
+    }
+  }
+
+  async function getAgreementStatus(
+    requestId: string,
+    pollSecret: string,
+    expected: ExpectedAgreement,
+    options?: { signal?: AbortSignal },
+  ): Promise<AgreementStatus> {
+    assertExpectedAgreement(expected);
+    const payload = asRecord(await readStatusPayload(requestId, pollSecret, options?.signal));
+    if (!payload || payload.request_id !== requestId) throw new AppClientError("invalid_status", "agreement status does not identify this request");
+    // A refusal or a withdrawal completes without a receipt, so the completion is read here rather than by parseStatusRead
+    if (payload.state !== "completed") return parseStatusRead(payload) as IntentStatusPending | IntentStatusIssued;
+    if (payload.intent_type !== "agreement") throw new AppClientError("invalid_status", "the request is not an agreement");
+    const receipt = typeof payload.receipt === "string" && payload.receipt.length > 0 ? payload.receipt : null;
+    const verified = receipt ? await verifiedCompletion(verifier, receipt, requestId, appId) : null;
+    return agreementStatusFrom(payload, verified, expected);
+  }
+
+  async function waitForAgreement(
+    requestId: string,
+    pollSecret: string,
+    expected: ExpectedAgreement,
+    waitOpts: WaitForAgreementOptions = {},
+  ): Promise<AgreementStatusCompleted> {
+    assertExpectedAgreement(expected);
+    return waitUntilCompleted((signal) => getAgreementStatus(requestId, pollSecret, expected, { signal }), waitOpts);
+  }
+
+  async function agreementState(input: AgreementStateInput): Promise<AgreementState> {
+    const sub = typeof input?.sub === "string" ? input.sub.trim() : "";
+    if (!SUBJECT_RE.test(sub)) throw new AppClientError("invalid_allowed_sub", "sub must be the user's ID in this App");
+    checkAgreementInput({ useCase: input.useCase });
+    const query = new URLSearchParams({ subject: sub, use_case: input.useCase });
+    if (input.purposeId !== undefined) {
+      if (typeof input.purposeId !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(input.purposeId)) {
+        throw new AppClientError("invalid_agreement", "purposeId must be a purpose in the App's profile");
+      }
+      query.set("purpose_id", input.purposeId);
+    }
+    const pathAndQuery = `/app/intent-requests/agreement/state?${query}`;
+    const jwt = await signLedgerAppRequest({ appId, operatePrivateJwk: operateJwk, method: "GET", pathAndQuery });
+    const res = await request(`${apiOrigin}${pathAndQuery}`, { cache: "no-store", headers: { authorization: `${LEDGER_APP_AUTH_SCHEME} ${jwt}` } }, input.signal ?? AbortSignal.timeout(10_000));
+    const body = await readJson(res);
+    if (res.status !== 200) {
+      const details = apiErrorDetails(body);
+      throw new AppClientError("agreement_state_failed", httpFailureMessage("agreement state", res.status, details), res.status, details);
+    }
+    return parseAgreementState(body);
+  }
+
+  async function requireAgreement(input: AgreementStateInput): Promise<Extract<AgreementState, { state: "open" }>> {
+    const state = await agreementState(input);
+    if (state.state === "none") {
+      throw new AppClientError("agreement_required", `no agreement in force for ${input.useCase}`, undefined, { agreement: "none" });
+    }
+    if (state.reconsentRequired) {
+      throw new AppClientError("agreement_required", `the agreement for ${input.useCase} was given on terms that changed since`, undefined, {
+        agreement: "reconsent_required",
+      });
+    }
+    return state;
   }
 
   function throwIfWaitEnded(caller: AbortSignal | undefined, timeoutSignal: AbortSignal, deadline: number): void {
@@ -1502,6 +1679,11 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     waitForCompletion,
     readWebhookPing: parseWebhookPing,
     verifier,
+    registerAgreement,
+    getAgreementStatus,
+    waitForAgreement,
+    agreementState,
+    requireAgreement,
     registerMandate,
     getMandateStatus,
     waitForMandate,

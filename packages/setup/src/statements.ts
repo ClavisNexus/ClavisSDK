@@ -84,6 +84,11 @@ export function orgAppRegionsStatement(input: { org: string; app: string; region
   };
 }
 
+/** The instruction to erase one person's agreement decisions. `subject` is the person's ID in the org's apps. */
+export function orgLexSubjectEraseStatement(input: { org: string; subject: string }): Statement {
+  return { type: "org.lex.subject_erase@1", org: input.org.trim(), subject: input.subject.trim() };
+}
+
 /** The place-of-incorporation declaration. It binds the current Customer Terms and DPA versions. */
 export function orgCardIncorporationStatement(input: {
   org: string;

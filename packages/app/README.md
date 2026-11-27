@@ -141,6 +141,49 @@ Outside the terms is `mandate_outside`. `violations` lists why (`amount_total`, 
 
 Stored records can be checked again with `app.verifier.verifyMandateHistory({ grant, terms, uses, close })`. Pass the grant receipt, the use records and the close record as the strings you kept. Turn the terms into a string with `JSON.stringify(terms)`. A single record is `verifyMandateRecord(record, { app })`. That check accepts a delegation record under the mandate attestation key. The receipt key (`sign-receipt`) refuses it.
 
+## Agreements
+
+Ask a user to agree to a step of your app — your terms, your privacy notice, marketing, sharing with a third party — on Connect, and check before an action that the agreement is in force and on today's terms. Clavis builds what the user is shown from your app's agreement profile (your documents, purposes and recipients, set with `@clavis.nexus/setup`: `app-lex-document` and `app-lex-profile-set`) and keeps the decision. Turn on “Agreements” under the app's allowed Intents first. A grant or a reconsent is signed with the user's passkey; a decline or a withdrawal is not.
+
+```ts
+const { requestId, pollSecret, consumeUrl, agreement } = await app.registerAgreement({
+  useCase: "tos",
+  allowedSub: sub,
+  returnUrl: "https://console.example/agreed",
+});
+// Store requestId, pollSecret and agreement on the server, and send the user to consumeUrl
+
+const decision = await app.waitForAgreement(requestId, pollSecret, agreement);
+// decision.action is grant, reconsent or deny. Store decision.decisionId, and decision.receipt for a grant or a reconsent
+```
+
+`useCase` is one of `login`, `tos`, `privacy_ack`, `third_party_jp`, `third_party_foreign`, `sensitive_acquire`, `marketing` and `terminal`. `ceremony` is `grant` (the default), `reconsent` or `withdraw`. When the terms changed since the user agreed, a `grant` completes as a `reconsent`. Pass `ageBand` (and `ageMethod`, what it rests on) when your app knows the user's age band; otherwise the user states it on Connect.
+
+A grant's or a reconsent's receipt is an app receipt with the statement `lex.agree@1` (`action`, `use_case`, and `shown`, the digest of the texts shown). The SDK has the verifier check it and checks that it answers the agreement you asked for.
+
+Check the agreement on the server immediately before sending. A queued job uses the subject stored with that job and checks again on each retry.
+
+```ts
+async function dispatch(job) {
+  try {
+    await app.requireAgreement({
+      sub: job.sub,
+      useCase: "marketing",
+      purposeId: "announcements",
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch (error) {
+    if (error instanceof AppClientError && error.code === "agreement_required") {
+      return error.agreement; // "none" or "reconsent_required". Leave the message unsent.
+    }
+    throw error; // Hold the job. Retry from the agreement check.
+  }
+  await mailer.deliver(job.message, { idempotencyKey: job.id });
+}
+```
+
+`agreementState({ sub, useCase, purposeId })` reads the current state. Omit `purposeId` to check all applicable purposes. The result is `{ state: "none" }` or `{ state: "open", decisionId, since, reconsentRequired }`. A failed lookup throws.
+
 ## On behalf of an organisation
 
 Ask for a signature or a delegation on behalf of an organisation. Only a person designated as a signer for that organisation can sign, and the receipt's statement is `app.sign.on_behalf@1` (a delegation is `mandate.grant.on_behalf@1`). Turn on “Request on behalf of an organisation” under the app's allowed Intents. The signer's organisation needs no Clavis plan.
@@ -386,6 +429,11 @@ Failures are `AppClientError`. It carries `code`, the HTTP `status`, and `apiErr
 | `invalid_app_user` | `appUser` is not 1 to 128 characters of text. Stopped before sending |
 | `link_pending` | The link has not been signed yet |
 | `link_mismatch` | The completed receipt is not a link, or binds another user, nonce or issuer |
+| `invalid_agreement` | `useCase`, `ceremony`, `ageBand` or `ageMethod` is not one Clavis takes, or `ageMethod` comes without `ageBand`. Stopped before sending |
+| `agreement_mismatch` | The completion answers another step, another action, or a receipt that is not `lex.agree@1` |
+| `agreement_required` | `requireAgreement` found no agreement in force (`agreement` is `none`), or one given on changed terms (`reconsent_required`) |
+| `agreement_state_failed` | The agreement state was not read. `apiError` holds the API's code |
+| `invalid_agreement_state` | The agreement state has the wrong shape |
 | `timeout` | `waitForCompletion` reached its deadline |
 | `ledger_bundle_invalid` | The verifier refused the ledger proof bundle |
 | `network_error` | A fetch failed |
