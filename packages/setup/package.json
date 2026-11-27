@@ -1,7 +1,7 @@
 {
   "name": "@clavis.nexus/setup",
   "version": "3.0.2",
-  "description": "CLI and MCP for Clavis Org and App setup (Passkey and consent steps require a human)",
+  "description": "CLI and MCP for Clavis Org and App setup, agreement profiles, and agreement records (Passkey steps require a human)",
   "type": "module",
   "license": "MIT",
   "repository": {

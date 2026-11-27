@@ -123,6 +123,49 @@ clavis app-regions-set <orgId> <appId> --all
 - When the same regions are already saved, the command returns `unchanged: true` and does not open a passkey.
 - An Org owner or admin can change the list. A stopped app cannot be changed.
 
+### Agreements
+
+What Connect shows when your app asks a user for an agreement comes from the app's agreement profile. Have Clavis snapshot your terms and privacy notice first, then set the profile with a passkey.
+
+```bash
+clavis app-lex-document <orgId> <appId> --url https://app.example.com/terms
+# put the sha256 it returns in the profile's documents
+clavis app-lex-profile-set <orgId> <appId> --file profile.json
+# remove it
+clavis app-lex-profile-set <orgId> <appId> --clear
+```
+
+- Clavis reads and normalises the profile, and returns the statement to sign (`org.app.lex_profile@1`). The CLI opens the passkey with that statement, then sets the same profile with the receipt. In MCP, use `clavis_app_lex_document` and `clavis_app_lex_profile_set`.
+- A document not snapshotted first is refused before the passkey (`error` starts with `document_not_snapshotted`).
+
+For a new App, add `--agreements` to `clavis app-register`, or set `agreements: true` in `clavis_app_register`.
+
+### Exporting agreement records
+
+```bash
+clavis lex-counts <orgId> --query-file query.json
+clavis lex-export <orgId> --request-file request.json
+clavis lex-export-status <orgId> <jobId>
+clavis lex-export-download <orgId> <jobId> --dir ./exports
+```
+
+- `request.json` is `{ "kind": "decisions" | "subject", "query": { ... }, "expiring_within_days": N, "records": true }`. `query` narrows by `from` and `to` (the period), `app_id`, `use_case`, `outcome`, `reason_code`, `pack_id`, `template`, `requirement`, `profile_version` and `params_version`. `expiring_within_days` keeps only records whose retention ends within that many days, so you can keep them yourself.
+- Many people's records (`decisions`) need an owner's or admin's passkey over the request. One person's (`subject`, with `query.subject_ref`) does not. One export runs at a time, and holds up to 100,000 decisions.
+- `lex-export-download` writes the files at mode 0600 under `<dir>/<jobId>/` — they hold people's records — after checking each file against the manifest and the manifest against the digest in the authenticated export status. An export is kept for 7 days.
+- In MCP: `clavis_lex_counts`, `clavis_lex_export`, `clavis_lex_exports`, `clavis_lex_export_status` and `clavis_lex_export_download`.
+
+### One person's agreement records
+
+```bash
+clavis lex-decision <orgId> <decisionId>
+clavis lex-subject-decisions <orgId> <subject>
+clavis lex-subject-erase <orgId> <subject>
+```
+
+- `subject` is the person's ID in your app (the `sub` you passed as `allowedSub`). `lex-decision` takes the `decisionId` your app received when the agreement completed.
+- `lex-subject-erase` erases that person's decisions now, as your organisation's instruction for their erasure request. It needs an owner's or admin's passkey and cannot be undone. The leaves on your ledger stay and no longer lead to anything. While the records are under a hold, it is refused (`error` starts with `org_hold`) and nothing is erased.
+- In MCP: `clavis_lex_decision`, `clavis_lex_subject_decisions` and `clavis_lex_subject_erase`.
+
 ### What this CLI covers
 
 - `clavis status` returns the Org, apps, host confirmation, the use declaration, the app's accepted regions (`accepted_regions` only when the list is narrowed), the signature card (`signature_card_blockers` is what holds it back) and the place of incorporation. Check the ledger subscription on developers.

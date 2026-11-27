@@ -86,3 +86,40 @@ export function buildMandateClaims(input: {
   if (input.onBehalfDomain) out.on_behalf = { domain: input.onBehalfDomain };
   return out;
 }
+
+/** The registration claims of an agreement (`intent_type: "agreement"`). Clavis builds what the user is shown from the app's profile. */
+export function buildAgreementClaims(input: {
+  appId: string;
+  iat: number;
+  exp: number;
+  jti: string;
+  useCase: string;
+  ceremony: string;
+  ageBand?: string;
+  ageMethod?: string;
+  ageAssertionRequired?: boolean;
+  allowedSub?: string;
+  returnUrl?: string;
+  webhookUrl?: string;
+  uiLocales?: readonly string[];
+}): Record<string, unknown> {
+  const payload: Record<string, unknown> = { use_case: input.useCase };
+  // Omitted is a grant, so only the other ceremonies are sent
+  if (input.ceremony !== "grant") payload.ceremony = input.ceremony;
+  if (input.ageBand !== undefined) payload.age_band = input.ageBand;
+  if (input.ageMethod !== undefined) payload.age_method = input.ageMethod;
+  if (input.ageAssertionRequired !== undefined) payload.age_assertion_required = input.ageAssertionRequired;
+  const out: Record<string, unknown> = {
+    app_id: input.appId,
+    intent_type: "agreement",
+    iat: input.iat,
+    exp: input.exp,
+    jti: input.jti,
+    payload,
+  };
+  if (input.allowedSub) out.allowed_sub = input.allowedSub;
+  if (input.webhookUrl) out.webhook_url = input.webhookUrl;
+  if (input.returnUrl) out.return_url = input.returnUrl;
+  if (input.uiLocales && input.uiLocales.length > 0) out.ui_locales = [...input.uiLocales];
+  return out;
+}
