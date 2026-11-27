@@ -102,7 +102,7 @@ clavis card-checkout <orgId> --consent-billing-data
 ```
 
 - The place of incorporation must already be declared against the current versions. When it is missing, `error` is `incorporation_required` or `incorporation_stale`.
-- Payment and billing need the customer's own consent to provide their Clavis account identifier, the Org ID, the feature being purchased, and, after purchase, usage of that feature (counts and times) to Polar Software Inc. in the United States. Run the command once without `--consent-billing-data`. The response's `human.message` (`needs_human: terms`) carries the consent statement and the Customer Terms and DPA versions. Show that statement to the customer, and run again with `--consent-billing-data` (MCP: `consent_billing_data: true`) only after they consent. An agent does not set the flag itself.
+- Payment and billing need the customer's own consent before checkout continues. Run the command once without `--consent-billing-data`. The response's `human.message` (`needs_human: terms`) carries the consent statement and the Customer Terms and DPA versions. Show that statement to the customer, and run again with `--consent-billing-data` (MCP: `consent_billing_data: true`) only after they consent. An agent does not set the flag itself.
 - `--lang ja` shows the consent statement in Japanese (the default is English). The purchase record is tied to the statement in the language that was shown.
 - `--offer bundle` buys the monthly bundle. The default is metered (`meter`).
 
