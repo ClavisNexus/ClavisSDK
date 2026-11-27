@@ -20,7 +20,7 @@ import {
 const APP_ID = APP_STATEMENT.app;
 const VERIFIERS = await vectorVerifiers();
 const SESSION = await sessionSigner();
-/** 見本の集約 JWKS に、封印者が署名したセッションの鍵を足したもの */
+/** 見本の集約 JWKS に、sealer が署名したセッションの鍵を足したもの */
 const ID_TOKEN = await sessionSigner("clavis-oidc-id-token-test", "oidc-id-token");
 const JWKS = jwksWith(SESSION.jwksKey, ID_TOKEN.jwksKey);
 const REDIRECT = "https://app.example/auth/clavis/callback";
@@ -349,7 +349,7 @@ describe("the id_token", () => {
     const badKey = { ...(await sealedJwksKey("wauthn-auth-jwt", forged.kid, other.jwk)), "clavis-sealer-signature": (forged.jwksKey as { "clavis-sealer-signature": string })["clavis-sealer-signature"] };
     const net = fakeNet(() => null, { jwks: () => jwksWith(SESSION.jwksKey, badKey) });
     const client = createAppClient({ apiOrigin: API_ORIGIN, appId: APP_ID, operatePrivateJwk: await operateJwk(), trustRoot: MASTER, verifiers: VERIFIERS, fetchImpl: net.fetchImpl });
-    // 封印者の署名が鍵と合わない JWKS は、照合器が断る（trustRoot につながらない）
+    // sealer の署名が鍵と合わない JWKS は、照合器が断る（trustRoot につながらない）
     await expect(client.verifier.trust()).rejects.toMatchObject({ code: "invalid_trust_root" });
   });
 

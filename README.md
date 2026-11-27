@@ -1,59 +1,70 @@
 # Clavis SDK
 
-Clavis App 向けの公開 npm パッケージ。ライセンスは MIT。
+npm packages for Clavis Apps: Sign in and Link, signature registration, agreements, the browser handoff shell, and the developers setup CLI / MCP. Guides live on [docs.clavis.nexus](https://docs.clavis.nexus).
 
-| ディレクトリ | npm 名 | 役割 |
-|---|---|---|
-| `packages/app` | `@clavis.nexus/app` | サーバ SDK。Clavis でのサインインと連携、署名依頼の登録、status、webhook ping、台帳への記録と証拠束。受領・委任の記録・証拠束は照合器 Collatio で確かめる |
-| `packages/app-shell` | `@clavis.nexus/app-shell` | ブラウザの部品。準備オーバーレイ（Connect へ渡すまで）と、Clavis でサインインのボタン |
-| `packages/setup` | `@clavis.nexus/setup` | developers 向けセットアップ CLI／MCP（Passkey と同意は人間） |
+Clavis App 向けの公開 npm パッケージです。サインインと連携、署名依頼、同意、ブラウザの受け渡し殻、developers のセットアップ CLI／MCP。手順の正本は [docs.clavis.nexus](https://docs.clavis.nexus) です。
 
-手順の正本は [docs.clavis.nexus](https://docs.clavis.nexus)。`message_digest` の計算はこのリポジトリの対象外。登録には、呼び出し側が用意した digest 文字列を渡す。
+| Package | |
+|---|---|
+| [`@clavis.nexus/app`](packages/app) | Server SDK. Sign in and Link, register a signature request, status, webhook ping, ledger notes and evidence, agreements. Receipts, delegation records and evidence bundles are checked with the Collatio verifier ([github.com/clavisnexus/collatio](https://github.com/clavisnexus/collatio)). |
+| [`@clavis.nexus/app-shell`](packages/app-shell) | Browser pieces: the handoff overlay until Connect takes over, and the Sign in with Clavis button. |
+| [`@clavis.nexus/setup`](packages/setup) | Developers setup CLI and MCP. Passkey and consent stay with a person. |
 
----
+`message_digest` is out of scope here. Pass a digest string the caller prepared when registering.
 
-## npm 公開（メンテナ）
+## Development
 
-`@clavis.nexus/*` は GitHub Actions（`.github/workflows/publish.yml`）から npm の Trusted Publishing で出す。npm トークンは使わない。手元からは公開しない。
+```bash
+pnpm install
+pnpm --filter @clavis.nexus/app build
+pnpm --filter @clavis.nexus/app-shell build
+pnpm --filter @clavis.nexus/setup build
+pnpm typecheck
+pnpm test
+```
 
-1. `main` で `packages/<dir>/package.json` の `version` を上げてマージする（`X.Y.Z` のみ。npm の latest より上）
-2. `main` の該当コミットに `<dir>-v<version>` のタグを打って push する
+Node.js 24 or later.
 
-   ```bash
-   git tag app-v3.0.1 && git push origin app-v3.0.1
-   ```
+## Release
 
-3. ワークフローが検査・build・試験・pack のあと、npm に **staged** で積む。この時点では公開されない
-4. 承認する前に、Actions の実行を開いて次を確かめる
-   - タグ名と、Summary の commit が `main` 上のコミットであること
-   - `stage` ジョブの Summary の integrity が、npmjs.com の Staged Packages に出ている integrity と同じこと
-   - 中身を見るときは `npm stage download <stage-id>` で tarball を落とす
-5. npmjs.com の Staged Packages で 2FA で Approve する。要らなければ Reject
+`.github/workflows/publish.yml` publishes through npm trusted publishing; no npm token is used. Raise `version` in `packages/<dir>/package.json` through a pull request to `main` (`X.Y.Z` only, above npm latest), then, once its checks on `main` have passed, tag the merged commit:
 
-公開の関門は 4〜5 の承認だけである。npm 側の Trusted Publisher は stage だけを許し（`npm publish` と `npm dist-tag` は許さない）、パッケージの Publishing access は「Require two-factor authentication and disallow tokens」にしておく。
+```bash
+git tag app-v3.0.1 && git push origin app-v3.0.1
+```
 
-`setup` は `@clavis.nexus/app` に依存する。`app` の新版を承認してから `setup` のタグを打つ。pack した `package.json` が npm に無い版の作業区画パッケージに依存していると、`scripts/release-check.mjs` が止める。
+The workflow inspects, builds, tests, packs and stages on npm. Before approving with 2FA under Staged Packages on npmjs.com, check that the commit in the run's summary is on `main` and that the integrity of the `stage` job matches the one npmjs.com shows. The trusted publisher on npm allows staging only (`npm publish` and `npm dist-tag` are not allowed). Set the package's Publishing access to require two-factor authentication and disallow tokens.
 
-`app` は照合器 `@clavis.nexus/collatio` に正確な版で依存する。版を替えたら、照合器のリポジトリをその版のタグ（`vX.Y.Z`）にして `node scripts/sync-collatio.mjs` で試験の見本（`packages/app/src/vectors/collatio-ops-1.json`）を取り直す。
+`setup` depends on `@clavis.nexus/app`. Approve the new `app` release before tagging `setup`. `scripts/release-check.mjs` stops when a packed `package.json` depends on a workspace package version that is not on npm.
 
-## 依存の監査（メンテナ）
+`app` pins `@clavis.nexus/collatio`. When that version changes, check out Collatio at the matching tag (`vX.Y.Z`) and refresh the test fixtures with `node scripts/sync-collatio.mjs` (`packages/app/src/vectors/collatio-ops-1.json`).
 
-`ci` は install の前に `pnpm run audit:security`（`scripts/audit-security.mjs`）を走らせ、`pnpm audit` の high 以上の勧告で落とす。毎日の schedule でも同じものが走る。
+## Dependency audit
 
-修正版がまだ無い勧告は直す手が無く、どの PR も同じ所で止まる。次をすべて満たすときだけ、`scripts/audit-exceptions.json` に例外を置いて通す。
+`ci` runs `pnpm run audit:security` (`scripts/audit-security.mjs`) before install and fails on any high or critical advisory `pnpm audit` reports. The daily schedule runs it too.
 
-- 公開するパッケージの依存に入らない。`pnpm audit --prod` には例外を当てず、そこに high 以上があれば必ず落とす
-- 攻撃者が入力を渡せる経路が無い（build や試験の道具が、リポに書いた値だけを受け取るなど）
-- 依存の更新や `overrides` で消せない
+An advisory with no fixed release cannot be fixed here, and it stops every pull request at the same step. It passes only through an exception in `scripts/audit-exceptions.json`, and only when all of these hold:
 
-例外には勧告の ID・パッケージ・見つかった正確な版・理由・決めた日（`decided`）・期限（`until`、`decided` から 30 日まで）を書く。例外を置く・延ばす PR は必須のチェックを弱めるので、理由・影響・外す条件を本文に書き、merge の前に人に確かめる。
+- It is not in the published package's dependencies. `pnpm audit --prod` takes no exception and always fails on high or critical
+- No attacker-controlled input reaches it (for example, a build or test tool that only receives values written in this repository)
+- Updating dependencies or `overrides` cannot remove it
 
-スクリプトは次のとき例外を当てずに落とす。修正版の公開と期限は毎日の schedule で見張る。
+An exception names the advisory ID, the package, the exact versions found, the reason, the day it was decided (`decided`) and its last day (`until`, at most 30 days after `decided`). A pull request that adds or extends one weakens a required check, so its description states the reason, the impact and when it comes off, and a maintainer confirms it before merge.
 
-- 期限を過ぎた。勧告を読み直し、外すか延ばす
-- 例外に無い版やパッケージが見つかった
-- 修正版が公開され、`minimumReleaseAge`（7 日）が経った。経つまでは install できないので例外のまま通し、いつから入れられるかを出す。経ったら lockfile を上げて例外を外す
-- 当たる勧告が無くなった。例外を外す
-- audit や registry の応答を読めない
+The script fails without applying the exception when:
 
-スクリプトの試験は `pnpm run test:scripts`（install は要らない）。
+- `until` has passed. Read the advisory again, then drop or extend the exception
+- A version or package the exception does not name is found
+- A fixed release is published and is older than `minimumReleaseAge` (7 days). Until then it still passes, since the fix cannot be installed yet, and prints the day it can be. After that, update the lockfile and drop the exception
+- No advisory matches the exception any more. Drop it
+- The audit or registry response cannot be read
+
+Test the script with `pnpm run test:scripts` (no install needed).
+
+## Security
+
+Report a vulnerability to security@clavis.nexus. The policy is at [legal.clavis.nexus/en/security](https://legal.clavis.nexus/en/security).
+
+## License
+
+MIT

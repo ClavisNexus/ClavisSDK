@@ -128,7 +128,7 @@ export async function vectorP256(label: string): Promise<{ privateKey: CryptoKey
   return { privateKey, jwk: { kty: "EC", crv: "P-256", x: exported.x!, y: exported.y! } };
 }
 
-/** 集約 JWKS の一つの鍵。封印者（見本の `p256/sealer`）が、鍵の枠と公開鍵に署名する */
+/** 集約 JWKS の一つの鍵。見本の sealer（`p256/sealer`）が、鍵の枠と公開鍵に署名する */
 export async function sealedJwksKey(slot: string, kid: string, jwk: { kty: "EC"; crv: "P-256"; x: string; y: string }): Promise<Record<string, unknown>> {
   const sealer = await vectorP256("sealer");
   const payload = { version: 1, purpose: "signed-jwks-child", protocol_ns: "clavis", slot, public_jwk: { ...jwk, kid, alg: "ES256" } };
