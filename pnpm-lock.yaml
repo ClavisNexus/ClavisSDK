@@ -19,8 +19,8 @@ importers:
   packages/app:
     dependencies:
       '@clavis.nexus/collatio':
-        specifier: 1.0.3
-        version: 1.0.3
+        specifier: 1.0.4
+        version: 1.0.4
       jose:
         specifier: 6.2.16
         version: 6.2.16
@@ -80,8 +80,8 @@ importers:
 
 packages:
 
-  '@clavis.nexus/collatio@1.0.3':
-    resolution: {integrity: sha512-IsAvPzA7/Y6JJRz1cN8IqKNZXDPS9Qz0S6f6CWWQX1Mhn39ZjPDUCsWyddmo2ysMh0xwSJhG2Ic+CwDbEns7Tw==}
+  '@clavis.nexus/collatio@1.0.4':
+    resolution: {integrity: sha512-zM5xZsggK5+8U1hAwjexMKe8ScyPmyyF5z14l2fW+EZAKXCXs8XLKb4rE+gU9CTltTn8GVVrKeMBFra3cqBqsw==}
     engines: {node: '>=24'}
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -1373,7 +1373,7 @@ packages:
 
 snapshots:
 
-  '@clavis.nexus/collatio@1.0.3': {}
+  '@clavis.nexus/collatio@1.0.4': {}
 
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
