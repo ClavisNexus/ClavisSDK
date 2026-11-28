@@ -1,7 +1,7 @@
 {
   "name": "@clavis.nexus/app-shell",
-  "version": "2.1.0",
-  "description": "Browser parts for Clavis App: the overlay that hands over to Connect, and the Sign in with Clavis button",
+  "version": "2.2.0",
+  "description": "Browser parts for Clavis App: the overlay that hands over to Connect, and the sign-in and link buttons",
   "type": "module",
   "license": "MIT",
   "repository": {

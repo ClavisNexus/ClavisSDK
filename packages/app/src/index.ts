@@ -43,7 +43,16 @@ export type {
   SignInScope,
   SignInTokens,
 } from "./sign-in.js";
-export type { Link, PendingLink, RegisterLinkInput, RegisterLinkResult } from "./link.js";
+export type {
+  CompleteLinkOptions,
+  Link,
+  PendingLink,
+  RegisterCodeLinkInput,
+  RegisterLinkInput,
+  RegisterLinkResult,
+  RegisterReturnLinkInput,
+  RegisterReturnLinkResult,
+} from "./link.js";
 export { createVerifier } from "./verify.js";
 export type {
   CreateVerifierOptions,
