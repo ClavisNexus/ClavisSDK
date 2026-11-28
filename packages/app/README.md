@@ -1,6 +1,6 @@
 # `@clavis.nexus/app`
 
-Server SDK for Node 24 and later (ESM). The browser parts, the handoff shell and the Sign in with Clavis button, are [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
+Server SDK for Node 24 and later (ESM). The browser parts, the handoff shell and the sign-in and link buttons, are [`@clavis.nexus/app-shell`](https://www.npmjs.com/package/@clavis.nexus/app-shell).
 
 Pass a SHA-256 digest as Base64URL (43 characters) in `messageDigest`. The caller prepares that string. The user signs the statement `app.sign@1`, which Clavis builds from it, with a passkey. Store the registration response's `pollSecret` on your server, and read completion with `getStatus` or `waitForCompletion`. A completion carries an app receipt (`receipt.app@1`).
 
@@ -345,7 +345,48 @@ const signOut = app.endSessionUrl({ postLogoutRedirectUri: "https://console.exam
 
 ## Link your Clavis account
 
-Link the Clavis account of a user already signed in to your app, and receive their ID in this app (`sub`).
+Link the Clavis account of a user already signed in to your app and receive their ID in this app (`sub`).
+
+### Same browser
+
+Keep the pending request in the app session that started it. On the callback, get the current user from that session and pass the request URL to `completeLink`.
+
+```ts
+import type { PendingLink } from "@clavis.nexus/app";
+
+async function startLink(appUser: string, keep: (pending: PendingLink) => Promise<void>) {
+  const { consumeUrl, pending } = await app.registerLink({
+    appUser,
+    confirm: "return",
+    returnUrl: "https://console.example/settings/clavis",
+  });
+  await keep(pending);
+  return Response.json({ url: consumeUrl });
+}
+
+async function returnFromClavis(request: Request, pending: PendingLink, signedInUserId: string) {
+  let result = "failed";
+  try {
+    const link = await app.completeLink(pending, { returned: request.url, appUser: signedInUserId });
+    await storeLink(link.iss, link.sub, link.appUser);
+    result = "linked";
+  } catch {
+    // Show the failure on the next page, after removing the callback parameters.
+  } finally {
+    await clearPendingLink();
+  }
+  return new Response(null, {
+    status: 303,
+    headers: { Location: `/settings/connections/${result}`, "Referrer-Policy": "no-referrer" },
+  });
+}
+```
+
+Mount the browser button with `kind: "link"` and use your start route to return `consumeUrl`. Read the pending request from the current app session. Looking one up by the callback's `request_id` alone can let a forwarded link join the wrong accounts. The callback should load no third-party resources, omit query strings from logs, and redirect promptly to a URL without the callback parameters, on success or failure.
+
+### Another device
+
+Show the display code in your app and let the user enter it on Connect.
 
 ```ts
 import type { PendingLink } from "@clavis.nexus/app";

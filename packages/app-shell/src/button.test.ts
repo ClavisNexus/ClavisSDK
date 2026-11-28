@@ -13,6 +13,7 @@ import {
   type MountClavisButtonOptions,
 } from "./index.js";
 import { MARK_PATHS } from "./mark.generated.js";
+import { CLAVIS_LINK_BUTTON_TEXT } from "./text.js";
 
 const here = (file: string) => join(dirname(fileURLToPath(import.meta.url)), file);
 const fontRecord = JSON.parse(readFileSync(here("clavis-button-grotesk.json"), "utf8")) as {
@@ -87,6 +88,18 @@ describe("renderClavisButtonHtml", () => {
   it("writes the label for each language", () => {
     expect(CLAVIS_BUTTON_TEXT.ja.label).toBe("Clavis でサインイン");
     expect(CLAVIS_BUTTON_TEXT.en.label).toBe("Sign in with Clavis");
+  });
+
+  it("renders and mounts the link action in its own language", async () => {
+    const markup = renderClavisButtonHtml({ tone: "primary", kind: "link", uiLocales: ["en"] });
+    expect(markup).toContain(">Link your Clavis account<");
+    const { handle, note } = mount({
+      kind: "link",
+      start: async () => { throw new Error("could not start"); },
+    });
+    expect(handle.button.textContent).toBe("Clavis と連携");
+    await expect(handle.press()).rejects.toThrow("could not start");
+    expect(note()).toBe(CLAVIS_LINK_BUTTON_TEXT.ja.retry);
   });
 
   it("defaults to auto and the label's width, and fills the column when fluid", () => {
@@ -288,7 +301,7 @@ describe("button.css", () => {
   it("names the label font's characters, and the font covers the Latin letters of every label", () => {
     expect(css).toContain(`unicode-range: ${fontRecord.unicodeRange};`);
     const latin = new Set(
-      Object.values(CLAVIS_BUTTON_TEXT)
+      [...Object.values(CLAVIS_BUTTON_TEXT), ...Object.values(CLAVIS_LINK_BUTTON_TEXT)]
         .map((t) => t.label)
         .join("")
         .split("")

@@ -50,6 +50,11 @@ import {
 } from "./ledger/handoff.js";
 import {
   assertPendingLink,
+  linkReturnCode,
+  type CompleteLinkOptions,
+  type RegisterCodeLinkInput,
+  type RegisterReturnLinkInput,
+  type RegisterReturnLinkResult,
   buildLinkClaims,
   linkFrom,
   normalizeAppUser,
@@ -516,15 +521,19 @@ export type AppClient = {
   orgMembership: (accessToken: string, options?: SignInCallOptions) => Promise<OrgMembership>;
   /**
    * Register a request to link the signed-in user's Clavis account (`federation.link`). Keep
-   * `pending` on your server, show `displayCode` on your own page (Connect asks the user to type it),
-   * then send the user to `consumeUrl`.
+   * `pending` in the app session and send the user to `consumeUrl`. For display-code confirmation,
+   * show `displayCode` on your own page before sending them to Connect.
    */
-  registerLink: (input: RegisterLinkInput) => Promise<RegisterLinkResult>;
+  registerLink: {
+    (input: RegisterCodeLinkInput): Promise<RegisterLinkResult>;
+    (input: RegisterReturnLinkInput): Promise<RegisterReturnLinkResult>;
+    (input: RegisterLinkInput): Promise<RegisterLinkResult | RegisterReturnLinkResult>;
+  };
   /**
    * Read the link's completion, have the verifier check its app receipt, and check that it binds the
    * user, nonce and issuer you asked for. Before the user has signed, it is `link_pending`.
    */
-  completeLink: (pending: PendingLink, options?: SignInCallOptions) => Promise<Link>;
+  completeLink: (pending: PendingLink, options?: CompleteLinkOptions) => Promise<Link>;
 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -1055,13 +1064,13 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
   }
 
   /** The status body of a request, for this request */
-  async function readStatusPayload(requestId: string, pollSecret: string, signal?: AbortSignal): Promise<unknown> {
+  async function readStatusPayload(requestId: string, pollSecret: string, signal?: AbortSignal, returnCode?: string): Promise<unknown> {
     if (!requestId.trim() || !pollSecret.trim()) {
       throw new AppClientError("invalid_status_args", "requestId and pollSecret required");
     }
     const res = await request(
       `${apiOrigin}/app/intent-requests/status/${encodeURIComponent(requestId)}`,
-      { headers: { "X-Intent-Poll-Secret": pollSecret } },
+      { headers: { "X-Intent-Poll-Secret": pollSecret, ...(returnCode ? { "X-Intent-Return-Code": returnCode } : {}) } },
       signal,
     );
     const body = await readJson(res);
@@ -1074,8 +1083,8 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     return payload;
   }
 
-  async function readStatus(requestId: string, pollSecret: string, signal?: AbortSignal): Promise<StatusRead> {
-    return parseStatusRead(await readStatusPayload(requestId, pollSecret, signal));
+  async function readStatus(requestId: string, pollSecret: string, signal?: AbortSignal, returnCode?: string): Promise<StatusRead> {
+    return parseStatusRead(await readStatusPayload(requestId, pollSecret, signal, returnCode));
   }
 
   async function getStatus(
@@ -1619,8 +1628,18 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     return parseOrgMembership(body, appId);
   }
 
-  async function registerLink(input: RegisterLinkInput): Promise<RegisterLinkResult> {
+  async function registerLink(input: RegisterCodeLinkInput): Promise<RegisterLinkResult>;
+  async function registerLink(input: RegisterReturnLinkInput): Promise<RegisterReturnLinkResult>;
+  async function registerLink(input: RegisterLinkInput): Promise<RegisterLinkResult | RegisterReturnLinkResult>;
+  async function registerLink(input: RegisterLinkInput): Promise<RegisterLinkResult | RegisterReturnLinkResult> {
     const appUser = normalizeAppUser(input?.appUser);
+    const confirm = input.confirm;
+    if (confirm !== undefined && confirm !== "code" && confirm !== "return") {
+      throw new AppClientError("invalid_link_confirmation", "confirm must be code or return");
+    }
+    if (confirm === "return" && (typeof input.returnUrl !== "string" || !input.returnUrl.trim())) {
+      throw new AppClientError("invalid_link_confirmation", "returnUrl is required for return confirmation");
+    }
     const allowedSub =
       input.allowedSub === undefined ? undefined : typeof input.allowedSub === "string" ? input.allowedSub.trim() : "";
     if (allowedSub !== undefined && !SUBJECT_RE.test(allowedSub)) {
@@ -1638,6 +1657,7 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
       appUser,
       nonce,
       iss: issuer,
+      confirm,
       returnUrl: input.returnUrl,
       webhookUrl: input.webhookUrl,
       allowedSub,
@@ -1645,18 +1665,21 @@ export function createAppClient(opts: CreateAppClientOptions): AppClient {
     });
     const { result } = await postRegister(claims, input.signal);
     if (!result.linkConsumeUrl) throw new AppClientError("invalid_register_response", "link_consume_url missing");
+    const pending = { requestId: result.requestId, pollSecret: result.pollSecret, appUser, nonce, iss: issuer };
+    if (confirm === "return") {
+      if (result.displayCode !== undefined) {
+        throw new AppClientError("invalid_register_response", "return confirmation must omit display_code");
+      }
+      return { requestId: result.requestId, consumeUrl: result.linkConsumeUrl, pending: { ...pending, confirm } };
+    }
     if (!result.displayCode) throw new AppClientError("invalid_register_response", "display_code missing");
-    return {
-      requestId: result.requestId,
-      consumeUrl: result.linkConsumeUrl,
-      displayCode: result.displayCode,
-      pending: { requestId: result.requestId, pollSecret: result.pollSecret, appUser, nonce, iss: issuer },
-    };
+    return { requestId: result.requestId, consumeUrl: result.linkConsumeUrl, displayCode: result.displayCode, pending };
   }
 
-  async function completeLink(pending: PendingLink, options?: SignInCallOptions): Promise<Link> {
+  async function completeLink(pending: PendingLink, options?: CompleteLinkOptions): Promise<Link> {
     assertPendingLink(pending);
-    const read = await readStatus(pending.requestId, pending.pollSecret, options?.signal);
+    const returnCode = linkReturnCode(pending, options);
+    const read = await readStatus(pending.requestId, pending.pollSecret, options?.signal, returnCode);
     if (read.state !== "completed") {
       throw new AppClientError("link_pending", `the link has not been signed yet (${read.state})`);
     }

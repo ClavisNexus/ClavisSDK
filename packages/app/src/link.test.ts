@@ -28,13 +28,16 @@ const registered = (extra: Record<string, unknown> = {}) => ({
 /** 登録と status を答える App の API。`status` は status の本文（`{ payload }` の中身） */
 async function clientFor(answer: { register?: unknown; status?: () => unknown } = {}) {
   const posted: string[] = [];
+  const reportedReturnCodes: (string | null)[] = [];
   const net = fakeNet((url, init) => {
     if (url.pathname === "/app/intent-requests/register") {
       posted.push(String(init?.body));
       return jsonResponse(answer.register ?? registered());
     }
     if (url.pathname.startsWith("/app/intent-requests/status/")) {
-      expect(new Headers(init?.headers).get("X-Intent-Poll-Secret")).toBe("poll-secret");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-Intent-Poll-Secret")).toBe("poll-secret");
+      reportedReturnCodes.push(headers.get("X-Intent-Return-Code"));
       return jsonResponse({ payload: answer.status?.() ?? { state: "pending", request_id: REQUEST } });
     }
     return null;
@@ -47,7 +50,7 @@ async function clientFor(answer: { register?: unknown; status?: () => unknown } 
     verifiers: VERIFIERS,
     fetchImpl: net.fetchImpl,
   });
-  return { client, posted, net };
+  return { client, posted, net, reportedReturnCodes };
 }
 
 const pendingFor = (extra: Partial<PendingLink> = {}): PendingLink => ({
@@ -126,6 +129,61 @@ describe("registerLink", () => {
       const { client } = await clientFor({ register: registered(extra) });
       await expect(client.registerLink({ appUser: "staff-01" })).rejects.toMatchObject({ code: "invalid_register_response" });
     }
+  });
+});
+
+describe("return-confirmed linking", () => {
+  const code = "A".repeat(43);
+  const callback = `https://app.example/settings/clavis?request_id=${REQUEST}&return_code=${code}`;
+
+  it("registers return confirmation and saves the mode without returning a display code", async () => {
+    const { client, posted } = await clientFor({ register: registered({ display_code: undefined }) });
+    const result = await client.registerLink({
+      appUser: "staff-01",
+      confirm: "return",
+      returnUrl: "https://app.example/settings/clavis",
+    });
+    const claims = decodeJwt((JSON.parse(posted[0]!) as { registration: string }).registration);
+    expect(claims).toMatchObject({ link_confirm: "return", return_url: "https://app.example/settings/clavis" });
+    expect(result).not.toHaveProperty("displayCode");
+    expect(result.pending).toMatchObject({ confirm: "return", requestId: REQUEST, appUser: "staff-01" });
+  });
+
+  it("requires a return URL and a response that matches the selected confirmation", async () => {
+    const { client } = await clientFor();
+    await expect(client.registerLink({ appUser: "staff-01", confirm: "return", returnUrl: "" }))
+      .rejects.toMatchObject({ code: "invalid_link_confirmation" });
+    await expect(client.registerLink({ appUser: "staff-01", confirm: "return", returnUrl: "https://app.example/linked" }))
+      .rejects.toMatchObject({ code: "invalid_register_response" });
+  });
+
+  it("uses the return code and still verifies the receipt", async () => {
+    const { client, reportedReturnCodes } = await clientFor({ status: completed });
+    const verify = vi.spyOn(client.verifier, "verifyReceipt").mockResolvedValue(linkReceipt());
+    await expect(client.completeLink(pendingFor({ confirm: "return" }), {
+      returned: new URL(callback),
+      appUser: "staff-01",
+    })).resolves.toMatchObject({ iss: API_ORIGIN, sub: PAIRWISE, appUser: "staff-01" });
+    expect(reportedReturnCodes).toEqual([code]);
+    expect(verify).toHaveBeenCalledOnce();
+  });
+
+  it("checks the signed-in user, request and unique return code before contacting Clavis", async () => {
+    const { client, net } = await clientFor({ status: completed });
+    const pending = pendingFor({ confirm: "return" });
+    await expect(client.completeLink(pending, { returned: callback, appUser: "staff-02" }))
+      .rejects.toMatchObject({ code: "link_mismatch" });
+    await expect(client.completeLink(pending, { returned: callback, appUser: "" }))
+      .rejects.toMatchObject({ code: "invalid_app_user" });
+    for (const returned of [callback.replace(REQUEST, "other"), callback + "&request_id=other"]) {
+      await expect(client.completeLink(pending, { returned, appUser: "staff-01" }))
+        .rejects.toMatchObject({ code: "link_mismatch" });
+    }
+    for (const returned of [undefined, "invalid URL", callback.replace(code, "short"), callback + "&return_code=second"]) {
+      await expect(client.completeLink(pending, { returned, appUser: "staff-01" }))
+        .rejects.toMatchObject({ code: "invalid_callback" });
+    }
+    expect(net.calls).toEqual([]);
   });
 });
 

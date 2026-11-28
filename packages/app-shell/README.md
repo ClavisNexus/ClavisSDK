@@ -1,6 +1,6 @@
 # `@clavis.nexus/app-shell`
 
-Browser parts (ESM): the handoff shell, which advances the phases from waiting on signature-request registration through the move to `consume_url`, and the Sign in with Clavis button.
+Browser parts (ESM): the handoff shell, which advances the phases from waiting on signature-request registration through the move to `consume_url`, and the sign-in and link buttons.
 
 Registration on the server is [`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app). Pass your own BFF as `register`. Its return value is `consume_url`. Leave `poll_secret` out of the BFF's JSON.
 
@@ -162,9 +162,9 @@ Layout and phase order are fixed. Colour, corner radius and font can be inherite
 
 `--clavis-handoff-bg`, `--clavis-handoff-surface`, `--clavis-handoff-surface-muted`, `--clavis-handoff-text`, `--clavis-handoff-text-muted`, `--clavis-handoff-text-subtle`, `--clavis-handoff-border`, `--clavis-handoff-brand`, `--clavis-handoff-error`, `--clavis-handoff-radius`, `--clavis-handoff-font`, `--clavis-handoff-mono`.
 
-## Sign in with Clavis button
+## Clavis buttons
 
-The button that starts Sign in with Clavis from your page.
+Start sign-in or link an account from your page.
 
 ```ts
 import { mountClavisButton } from "@clavis.nexus/app-shell";
@@ -182,10 +182,11 @@ mountClavisButton(document.querySelector<HTMLElement>("#clavis-sign-in")!, {
 });
 ```
 
-`start` calls your server and returns the authorization URL from `beginSignIn` ([`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app)). The button calls it when pressed, and not before.
+`start` calls your server and returns the authorization URL from `beginSignIn` ([`@clavis.nexus/app`](https://www.npmjs.com/package/@clavis.nexus/app)). The button calls it when pressed. For `kind: "link"` (2.2.0 and later), return the `consumeUrl` from `registerLink` with `confirm: "return"` and keep the pending request in the current app session.
 
 | Option | Values |
 |--------|--------|
+| `kind` | `sign-in` (default), `link` |
 | `tone` | `primary` (ink fill), `secondary` (sheet with an ink rule) |
 | `theme` | `auto` (default, follows `prefers-color-scheme`), `light`, `dark` |
 | `width` | `content` (default, as wide as the label), `fluid` (fills the column) |
@@ -196,6 +197,7 @@ Colour, shape (a rectangle, corners 0, 44px high, no shadow), type, wording, the
 | `en` | `ja` |
 |------|------|
 | Sign in with Clavis | Clavis でサインイン |
+| Link your Clavis account | Clavis と連携 |
 
 The page loads nothing from Clavis: no script, frame or image, no cookie, nothing measured. The mark is inline SVG, and the label font comes with `button.css` from your own origin.
 
@@ -229,7 +231,7 @@ import { renderClavisButtonHtml } from "@clavis.nexus/app-shell";
 const html = `<div id="clavis-sign-in">${renderClavisButtonHtml({ tone: "primary", uiLocales: ["ja"] })}</div>`;
 ```
 
-`CLAVIS_BUTTON_TEXT` holds the wording for each language.
+`CLAVIS_BUTTON_TEXT` holds the sign-in wording for each language.
 
 ## License
 

@@ -1,7 +1,7 @@
 import { ClavisButtonError, type ClavisButtonErrorCode } from "./errors.js";
 import { MARK_PATHS, MARK_VIEWBOX } from "./mark.generated.js";
 import { checkNavigationUrl, type NavigationRefusal } from "./navigation.js";
-import { CLAVIS_BUTTON_TEXT, resolveLocale, type ClavisButtonText, type HandoffLocale } from "./text.js";
+import { CLAVIS_BUTTON_TEXT, CLAVIS_LINK_BUTTON_TEXT, resolveLocale, type ClavisButtonText, type HandoffLocale } from "./text.js";
 
 /** `primary` is an ink fill; `secondary` is the sheet with an ink rule */
 export type ClavisButtonTone = "primary" | "secondary";
@@ -10,9 +10,13 @@ export type ClavisButtonTheme = "light" | "dark" | "auto";
 /** `content` is as wide as the label; `fluid` fills the column it is placed in */
 export type ClavisButtonWidth = "content" | "fluid";
 
+/** The action started by the button. Omit it for sign-in. */
+export type ClavisButtonKind = "sign-in" | "link";
+
 /** What the business chooses. Colour, shape, corners, type, wording, mark and height are fixed */
 export type ClavisButtonOptions = {
   tone: ClavisButtonTone;
+  kind?: ClavisButtonKind;
   /** Default `auto` */
   theme?: ClavisButtonTheme;
   /** Default `content` */
@@ -32,7 +36,7 @@ export type MountClavisButtonOptions = ClavisButtonOptions & {
   allowedHosts: readonly string[];
   /**
    * Called when the button is pressed, and not before. Call your own server and return the URL to
-   * open: the authorization URL from `beginSignIn`.
+   * open: the authorization URL from `beginSignIn` or the `consumeUrl` from `registerLink`.
    */
   start: () => Promise<string>;
   /** Defaults to `window.location.assign` */
@@ -66,12 +70,13 @@ type Resolved = { tone: ClavisButtonTone; theme: ClavisButtonTheme; width: Clavi
 function resolve(options: ClavisButtonOptions): Resolved {
   if (!options || typeof options !== "object") throw new TypeError("options required");
   const locale = resolveLocale(options.uiLocales);
+  const kind = pick(options.kind, ["sign-in", "link"], "sign-in", "kind");
   return {
     tone: pick(options.tone, TONES, undefined, "tone"),
     theme: pick(options.theme, THEMES, "auto", "theme"),
     width: pick(options.width, WIDTHS, "content", "width"),
     locale,
-    text: CLAVIS_BUTTON_TEXT[locale],
+    text: (kind === "link" ? CLAVIS_LINK_BUTTON_TEXT : CLAVIS_BUTTON_TEXT)[locale],
   };
 }
 
@@ -159,7 +164,7 @@ const START_URL_REFUSALS: Record<NavigationRefusal, [ClavisButtonErrorCode, (hos
 const asError = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 
 /**
- * Put the Sign in with Clavis button in `element` (its content is replaced, so markup from
+ * Put the sign-in or link button in `element` (its content is replaced, so markup from
  * `renderClavisButtonHtml` can stand there until this runs). Nothing is sent before the button is
  * pressed; no cookie is set and nothing is measured.
  *

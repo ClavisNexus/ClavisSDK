@@ -114,3 +114,20 @@ export const CLAVIS_BUTTON_TEXT: Readonly<Record<HandoffLocale, ClavisButtonText
   en: Object.freeze(BUTTON_EN),
   ja: Object.freeze(BUTTON_JA),
 });
+
+const LINK_BUTTON_EN: ClavisButtonText = {
+  label: "Link your Clavis account",
+  retry: "Couldn't start linking your account. Try again in a moment.",
+  blocked: "Couldn't start linking your account. Please contact this site's support.",
+};
+
+const LINK_BUTTON_JA: ClavisButtonText = {
+  label: "Clavis と連携",
+  retry: "連携を始められませんでした。もう一度お試しください。",
+  blocked: "連携を始められませんでした。このサイトのサポートにお問い合わせください。",
+};
+
+export const CLAVIS_LINK_BUTTON_TEXT: Readonly<Record<HandoffLocale, ClavisButtonText>> = Object.freeze({
+  en: Object.freeze(LINK_BUTTON_EN),
+  ja: Object.freeze(LINK_BUTTON_JA),
+});

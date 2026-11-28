@@ -59,6 +59,7 @@ export type AppClientErrorCode =
   | "org_membership_failed"
   | "invalid_org_membership"
   | "invalid_app_user"
+  | "invalid_link_confirmation"
   | "link_pending"
   | "link_mismatch"
   | "invalid_agreement"

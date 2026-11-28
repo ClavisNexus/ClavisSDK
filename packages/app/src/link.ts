@@ -14,16 +14,15 @@ export const FEDERATION_LINK = "federation.link@1";
 const APP_USER_MAX = 128;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+const RETURN_CODE_RE = /^[A-Za-z0-9_-]{43}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-export type RegisterLinkInput = {
+type LinkRegistration = {
   /**
    * Your own ID for the user who is signed in to your app. The user signs it. Normalised to NFC with
    * the ends trimmed, as Clavis does; at most 128 UTF-16 code units, with no control characters.
    */
   appUser: string;
-  /** Where to send the user after linking: https under the app's confirmed host. Omitted, the user ends on Connect */
-  returnUrl?: string;
   webhookUrl?: string;
   /** When you already know the user's ID in this app, pass it: only that person can sign the link */
   allowedSub?: string;
@@ -34,8 +33,32 @@ export type RegisterLinkInput = {
   signal?: AbortSignal;
 };
 
+export type RegisterCodeLinkInput = LinkRegistration & {
+  confirm?: "code";
+  /** A registered HTTPS return URL. Omit it to end on Connect. */
+  returnUrl?: string;
+};
+
+export type RegisterReturnLinkInput = LinkRegistration & {
+  confirm: "return";
+  /** A registered HTTPS return URL. Connect sends the browser that signed back to this URL. */
+  returnUrl: string;
+};
+
+export type RegisterLinkInput = RegisterCodeLinkInput | RegisterReturnLinkInput;
+
+export type CompleteLinkOptions = {
+  /** Pass the callback request URL when completing a link registered with `confirm: "return"`. */
+  returned?: string | URL;
+  /** For a return link, read the signed-in user ID from your app session. */
+  appUser?: string;
+  signal?: AbortSignal;
+};
+
 /** What ties the completion to this link request. Keep it on your server and use it in `completeLink` */
 export type PendingLink = {
+  /** Missing on requests registered with earlier SDK versions. Those requests use the display code. */
+  confirm?: "code" | "return";
   requestId: string;
   /** Read status with it. Leave it on your server */
   pollSecret: string;
@@ -54,6 +77,11 @@ export type RegisterLinkResult = {
   /** The confirmation code Connect asks the user to type. Show it on your own page before handing the user over to Connect */
   displayCode: string;
   pending: PendingLink;
+};
+
+export type RegisterReturnLinkResult = Omit<RegisterLinkResult, "displayCode" | "pending"> & {
+  displayCode?: never;
+  pending: PendingLink & { confirm: "return" };
 };
 
 export type Link = {
@@ -92,6 +120,7 @@ export function buildLinkClaims(input: {
   nonce: string;
   iss: string;
   returnUrl?: string;
+  confirm?: "code" | "return";
   webhookUrl?: string;
   allowedSub?: string;
   uiLocales?: readonly string[];
@@ -107,6 +136,7 @@ export function buildLinkClaims(input: {
   if (input.allowedSub) out.allowed_sub = input.allowedSub;
   if (input.webhookUrl) out.webhook_url = input.webhookUrl;
   if (input.returnUrl) out.return_url = input.returnUrl;
+  if (input.confirm === "return") out.link_confirm = "return";
   if (input.uiLocales && input.uiLocales.length > 0) out.ui_locales = [...input.uiLocales];
   return out;
 }
@@ -115,6 +145,7 @@ export function assertPendingLink(pending: PendingLink): void {
   const ok =
     pending !== null &&
     typeof pending === "object" &&
+    (pending.confirm === undefined || pending.confirm === "code" || pending.confirm === "return") &&
     typeof pending.requestId === "string" &&
     pending.requestId.length > 0 &&
     typeof pending.pollSecret === "string" &&
@@ -126,6 +157,31 @@ export function assertPendingLink(pending: PendingLink): void {
     typeof pending.iss === "string" &&
     pending.iss.length > 0;
   if (!ok) throw new AppClientError("invalid_status_args", "pending must be the value registerLink returned");
+}
+
+/** Check the browser return against the pending link held in the current app session before reading status. */
+export function linkReturnCode(pending: PendingLink, options?: CompleteLinkOptions): string | undefined {
+  if (pending.confirm !== "return") return undefined;
+  if (normalizeAppUser(options?.appUser) !== pending.appUser) {
+    throw new AppClientError("link_mismatch", "the signed-in user does not match the pending link");
+  }
+  if (!options?.returned) throw new AppClientError("invalid_callback", "the return URL is required");
+  let url: URL;
+  try {
+    url = new URL(options.returned);
+  } catch {
+    throw new AppClientError("invalid_callback", "the return URL is invalid");
+  }
+  const ids = url.searchParams.getAll("request_id");
+  if (ids.length !== 1 || ids[0] !== pending.requestId) {
+    throw new AppClientError("link_mismatch", "the return request_id does not match the pending link");
+  }
+  const codes = url.searchParams.getAll("return_code");
+  const code = codes[0];
+  if (codes.length !== 1 || !code || !RETURN_CODE_RE.test(code)) {
+    throw new AppClientError("invalid_callback", "the return URL must contain one valid return_code");
+  }
+  return code;
 }
 
 /** Read the link from the checked receipt, and check it binds the user, nonce and issuer you asked for */
